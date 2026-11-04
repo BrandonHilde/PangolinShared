@@ -1,5 +1,7 @@
 package pangolin
 
+import "core:slice"
+
 // Animated GIF: one palette for all frames (median cut when there are more than 255 colors), LZW
 // compressed. Pixels with alpha below 128 become the transparent color 0.
 
