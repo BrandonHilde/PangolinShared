@@ -839,6 +839,7 @@ Popup_Item :: struct {
 }
 
 Popup :: struct {
+	scroll: i32, // a list taller than the window
 	open:      bool,
 	owner:     u32,
 	menu_idx:  int, // menubar index or -1
@@ -854,6 +855,7 @@ Popup :: struct {
 popup: Popup
 
 popup_begin :: proc(owner: u32, anchor: Rect, min_w: i32 = 0, menu_idx := -1) {
+	popup.scroll = 0
 	popup.open = true
 	popup.owner = owner
 	popup.anchor = anchor
@@ -951,21 +953,30 @@ popup_run :: proc() {
 		x = popup.anchor.x + popup.anchor.w
 		y = popup.anchor.y
 	}
-	if x + w > i32(ui.w) {
-		x = i32(ui.w) - w
-	}
+	// never wider or taller than the window: a list that does not fit scrolls with the wheel
+	w = min(w, i32(ui.w))
+	full_h := h
+	h = min(h, i32(ui.h))
+	x = max(min(x, i32(ui.w) - w), 0)
 	if y + h > i32(ui.h) {
 		y = max(popup.anchor.y - h, 0)
-		if popup.side {
+		if popup.side || y + h > i32(ui.h) {
 			y = i32(ui.h) - h
 		}
 	}
 	box := Rect{x, y, w, h}
+	if full_h > h {
+		popup.scroll = clamp(popup.scroll - i32(ui.wheel) * POPUP_ITEM_H * 2, 0, full_h - h)
+	} else {
+		popup.scroll = 0
+	}
 	// shadow + frame
 	draw_shadow(f32(box.x), f32(box.y + 3), f32(box.w), f32(box.h), 6, 10, Color{0, 0, 0, 150})
 	draw_rrect(f32(box.x), f32(box.y), f32(box.w), f32(box.h), 6, C_PANEL)
 	draw_rrect_outline(f32(box.x), f32(box.y), f32(box.w), f32(box.h), 6, C_RING_HI)
-	cy := box.y + 4
+	clip_begin(box)
+	defer clip_end()
+	cy := box.y + 4 - popup.scroll
 	for &it in popup.items {
 		if it.sep {
 			hline(box.x + 8, cy + 3, box.w - 16, C_RING_HI)
@@ -1264,5 +1275,71 @@ tooltip_draw :: proc() {
 		for l, i in desc {
 			text(x + 7, dy + i32(i) * TIP_LINE_H + (TIP_LINE_H - FONT_CAP) / 2, l, C_TEXT)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Dialog windows
+// ---------------------------------------------------------------------------
+
+@(private = "file")
+dialog_scroll: i32
+@(private = "file")
+dialog_scroll_id: u32
+@(private = "file")
+dialog_clipped: bool
+
+// Draws the dim background and the window frame; returns the content area. A window is never larger than
+// the program's: one that does not fit gets narrower, and its content scrolls with the mouse wheel.
+// The main loop calls dialog_frame_end after the dialog's content.
+dialog_frame :: proc(title: string, w_in, h_in: i32, dim := true, docked := false) -> Rect {
+	ui.layer = 2
+	if dim && !docked {
+		fill_rect(Rect{0, 0, i32(ui.w), i32(ui.h)}, Color{6, 7, 10, 130})
+	}
+	w := min(w_in, i32(ui.w) - 8)
+	h := min(h_in, i32(ui.h) - 8)
+	x := (i32(ui.w) - w) / 2
+	y := (i32(ui.h) - h) / 2
+	if docked {
+		x = max(canvas_vp.x + canvas_vp.w - w - 12, 4)
+		y = min(canvas_vp.y + 12, i32(ui.h) - h - 4)
+	}
+	box := Rect{x, y, w, h}
+	draw_shadow(f32(x), f32(y + 6), f32(w), f32(h), 7, 22, Color{0, 0, 0, 190})
+	draw_rrect(f32(x), f32(y), f32(w), f32(h), 7, C_PANEL)
+	// title bar: rounded on top only (the lower half is clipped away)
+	clip_begin(Rect{x, y, w, 20})
+	draw_rrect(f32(x), f32(y), f32(w), 40, 7, C_PANEL_DK)
+	clip_end()
+	hline(x, y + 20, w, C_BORDER)
+	draw_rrect_outline(f32(x), f32(y), f32(w), f32(h), 7, C_RING_HI)
+	text(x + 12, y + (20 - FONT_CAP) / 2, title, C_TEXT)
+	c := Rect{x + 12, y + 26, w - 24, h - 34}
+	id := make_id({}, title)
+	if id != dialog_scroll_id {
+		dialog_scroll_id = id
+		dialog_scroll = 0
+	}
+	extra := h_in - h
+	if extra <= 0 {
+		dialog_scroll = 0
+		return c
+	}
+	if in_rect(box, ui.mx, ui.my) do dialog_scroll -= i32(ui.wheel) * 24
+	dialog_scroll = clamp(dialog_scroll, 0, extra)
+	th := max(c.h * c.h / (c.h + extra), 12)
+	draw_rrect(f32(x + w - 5), f32(c.y + dialog_scroll * (c.h - th) / extra), 3, f32(th), 1, C_RING_HI)
+	clip_begin(Rect{x + 1, y + 21, w - 2, h - 22})
+	dialog_clipped = true
+	c.y -= dialog_scroll
+	c.h += extra
+	return c
+}
+
+dialog_frame_end :: proc() {
+	if dialog_clipped {
+		clip_end()
+		dialog_clipped = false
 	}
 }
