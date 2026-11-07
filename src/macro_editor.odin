@@ -2,6 +2,7 @@ package pangolin
 
 import "core:fmt"
 import "core:math"
+import "core:slice"
 import "core:strings"
 
 // The node editor, in the style of ComfyUI: macros are built as graphs of nodes on a canvas that pans and zooms.
@@ -10,7 +11,8 @@ import "core:strings"
 //   - Every setting is a widget on its node, with a socket on the left: wire a value node's output into it and the
 //     setting takes the wired value instead.
 //   - Drag from a socket to connect; drop a wire on empty canvas to pick a node that fits it. Drag a wire off an input
-//     to move or remove it. Double-click the canvas (or Tab) to add any node by searching for it.
+//     to move or remove it. Start typing on the canvas (or double-click it, or press Tab) to find a node: the search
+//     also offers nodes with one of their choices already picked, so "soft light" finds Layer Blend Mode set to it.
 //   - Drag empty canvas, or with the middle button, to pan; the wheel zooms. Ctrl-drag selects with a box.
 //   - Widgets are on the nodes at 100%; zoomed out, the panel on the right edits the selected node.
 //
@@ -24,7 +26,7 @@ ME_PORT_R :: 4.5
 ME_LIB_W :: 180
 ME_SIDE_W :: 230
 ME_BAR_H :: 26
-ME_SEARCH_W :: 240
+ME_SEARCH_W :: 300
 ME_SEARCH_ROWS :: 14
 ME_LABEL_W :: 0 // widgets show their own label
 
@@ -481,6 +483,18 @@ me_keys :: proc() {
 	if ui.ctrl && IsKeyPressed(.S) do me_save()
 	if IsKeyPressed(.F5) do me_run()
 	if popup.open do return
+	// typing on the canvas starts a search with what was typed
+	if !ui.ctrl && !ui.alt && len(ui.chars) > 0 {
+		sb := strings.builder_make(context.temp_allocator)
+		for r in ui.chars do if r > ' ' || (r == ' ' && strings.builder_len(sb) > 0) do strings.write_rune(&sb, r)
+		if typed := strings.to_string(sb); typed != "" {
+			at := to_graph({f32(me.canvas.x + me.canvas.w / 2), f32(me.canvas.y + me.canvas.h / 3)})
+			if in_rect(me.canvas, ui.mx, ui.my) do at = to_graph({f32(ui.mx), f32(ui.my)})
+			me_search_open(at, false)
+			name_set(&me.search_text, typed)
+			return
+		}
+	}
 	if IsKeyPressed(.ESCAPE) {
 		if len(me.sel) > 0 {
 			clear(&me.sel)
@@ -988,7 +1002,20 @@ setting_widget :: proc(n: ^Macro_Node, s: ^Macro_Setting, i: int, r: Rect, v: Ma
 	case .Text:
 		lw := text_w(s.name) + 8
 		text(r.x, r.y + (r.h - FONT_CAP) / 2, s.name, C_TEXT_DIM)
-		if t, changed := text_box(n, s, Rect{r.x + lw, r.y, r.w - lw, r.h}, v.text, tip); changed do set(n, s, {text = t})
+		bw: i32 = s.browse ? 24 : 0
+		if t, changed := text_box(n, s, Rect{r.x + lw, r.y, r.w - lw - bw, r.h}, v.text, tip); changed do set(n, s, {text = t})
+		BROWSE_TIP :: "Pick the folder and the file name in a file window. {name} in the name becomes the document's name when the macro runs, and {ext} the format's extension."
+		if s.browse && button(Rect{r.x + r.w - 20, r.y, 20, r.h}, "...", {"Choose the file", BROWSE_TIP}) {
+			initial := v.text != "" ? path_basename(v.text) : "{name}"
+			filters := [1]Filter{{"All files (*.*)", "*.*"}}
+			if p, ok := native_dialog(true, fmt.tprintf("%s: where to save", s.name), filters[:], "", initial); ok {
+				path, _ := strings.replace_all(p, "\\", "/", context.temp_allocator)
+				set(n, s, {text = path})
+				me.edit_node = 0
+				ui.focus_id = 0
+				delete(p)
+			}
+		}
 	}
 }
 
@@ -1027,6 +1054,62 @@ me_search_rect :: proc() -> Rect {
 	return {x, y, ME_SEARCH_W, h}
 }
 
+// A node the search offers: the node itself, or the node with one of its choices already picked.
+Macro_Hit :: struct {
+	def:     ^Macro_Def,
+	setting: int, // the Choice setting that is picked, or -1
+	choice:  int,
+	label:   string,
+	score:   int,
+}
+
+// The nodes that match what was typed, best first (temp memory). Every word typed has to be in the node's name,
+// category or description. A word that is in one of a node's choices ("soft light", "png", "bicubic") also offers the
+// node with that choice picked. `fits` leaves out nodes that can't join the wire being dropped.
+macro_search :: proc(query: string, fits: proc(_: ^Macro_Def) -> bool = nil) -> []Macro_Hit {
+	out := make([dynamic]Macro_Hit, context.temp_allocator)
+	q := strings.to_lower(strings.trim_space(query), context.temp_allocator)
+	words := strings.fields(q, context.temp_allocator)
+	has_all :: proc(hay: string, words: []string) -> bool {
+		for w in words do if !strings.contains(hay, w) do return false
+		return true
+	}
+	defs := make([dynamic]^Macro_Def, context.temp_allocator)
+	for &d in macro_shared_defs() do append(&defs, &d)
+	for &d in macro_catalogue() do append(&defs, &d)
+	for d in defs {
+		if d.kind == .Start || (fits != nil && !fits(d)) do continue
+		name := strings.to_lower(d.name, context.temp_allocator)
+		place := strings.to_lower(fmt.tprintf("%s %s %s", d.name, d.category, d.id), context.temp_allocator)
+		score := 0
+		switch {
+		case len(words) == 0:
+			score = 1
+		case has_all(name, words):
+			score = strings.has_prefix(name, q) ? 100 : 80
+		case has_all(place, words):
+			score = 60
+		case has_all(fmt.tprintf("%s %s", place, strings.to_lower(d.help, context.temp_allocator)), words):
+			score = 20
+		}
+		if score > 0 do append(&out, Macro_Hit{d, -1, 0, d.name, score})
+		if len(words) == 0 do continue
+		for s, si in d.settings {
+			if s.type != .Choice do continue
+			for c, ci in s.choices {
+				lc := strings.to_lower(c, context.temp_allocator)
+				in_choice := false
+				for w in words do if strings.contains(lc, w) do in_choice = true
+				if !in_choice || !has_all(fmt.tprintf("%s %s %s", lc, place, strings.to_lower(s.name, context.temp_allocator)), words) do continue
+				sc := lc == q ? 95 : (strings.has_prefix(lc, q) ? 90 : 70)
+				append(&out, Macro_Hit{d, si, ci, fmt.tprintf("%s: %s", d.name, c), sc})
+			}
+		}
+	}
+	slice.stable_sort_by(out[:], proc(a, b: Macro_Hit) -> bool {return a.score > b.score})
+	return out[:]
+}
+
 // The nodes whose name or category has every word typed (temp memory).
 @(private = "file")
 defs_matching :: proc(query: string, wire_only: bool) -> []^Macro_Def {
@@ -1054,9 +1137,10 @@ me_search :: proc(r: Rect) {
 	if me.search_focus {
 		ui.focus_id = make_id(fr, "text")
 		ui.caret = me.search_text.n
+		ui.sel_all = false
 		me.search_focus = false
 	}
-	list := defs_matching(name_str(&me.search_text), me.search_wire)
+	list := macro_search(name_str(&me.search_text), me.search_wire ? def_fits_wire : nil)
 	if IsKeyPressed(.DOWN) || IsKeyPressedRepeat(.DOWN) do me.search_pick += 1
 	if IsKeyPressed(.UP) || IsKeyPressedRepeat(.UP) do me.search_pick -= 1
 	me.search_pick = clamp(me.search_pick, 0, max(len(list) - 1, 0))
@@ -1064,22 +1148,28 @@ me_search :: proc(r: Rect) {
 	pick := -1
 	if submitted && len(list) > 0 do pick = me.search_pick
 	for i in first ..< min(len(list), first + ME_SEARCH_ROWS) {
-		d := list[i]
+		h := list[i]
+		d := h.def
 		row := Rect{r.x + 4, r.y + 22 + i32(i - first) * 16, r.w - 8, 16}
 		hover := in_rect(row, ui.mx, ui.my)
 		if hover && (ui.mx != ui.pmx || ui.my != ui.pmy) do me.search_pick = i
 		if i == me.search_pick do draw_rrect(f32(row.x), f32(row.y), f32(row.w), f32(row.h), RADIUS, C_HOVER)
-		text(row.x + 6, row.y + 4, d.name, C_TEXT)
 		cw := text_w(d.category)
+		text_clipped(Rect{row.x + 6, row.y + 4, row.w - cw - 18, 12}, h.label, h.setting >= 0 ? C_ACCENT : C_TEXT)
 		text(row.x + row.w - cw - 6, row.y + 4, d.category, C_TEXT_OFF)
 		if hover {
-			tooltip_hover(make_id(row, "mesearch"), {d.name, d.help})
+			tooltip_hover(make_id(row, "mesearch"), {h.label, d.help})
 			if ui.pressed[0] do pick = i
 		}
 	}
 	if len(list) == 0 do text(r.x + 10, r.y + 28, "No node matches", C_TEXT_DIM)
 	if pick >= 0 {
-		id := me_add(list[pick].id, me.search_at)
+		h := list[pick]
+		id := me_add(h.def.id, me.search_at)
+		if id != 0 && h.setting >= 0 {
+			s := &h.def.settings[h.setting]
+			macro_set_arg(me.m, macro_node(me.m, id), s.key, s.choices[h.choice])
+		}
 		if me.search_wire && id != 0 do me_attach(id)
 		me.search = false
 		ui.focus_id = 0

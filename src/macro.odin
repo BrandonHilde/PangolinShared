@@ -53,6 +53,7 @@ Macro_Setting :: struct {
 	choices: []string,
 	def:     Macro_Value,
 	help:    string,
+	browse:  bool, // Text: a file path, with a button that picks it in a save window
 }
 
 Macro_Kind :: enum u8 {
