@@ -1140,6 +1140,48 @@ draw_circle_outline :: proc(cx, cy, r: f32, c: Color) {
 	sdl.RenderLines(gfx.ren, raw_data(pts), i32(n + 1))
 }
 
+// A line `w` logical pixels wide (a quad, so it keeps its width at every UI scale).
+draw_thick_line :: proc(a, b: Vec2, w: f32, color: Color) {
+	d := b - a
+	l := math.sqrt(d.x * d.x + d.y * d.y)
+	if l < 0.001 do return
+	n := Vec2{-d.y, d.x} * (w / 2 / l)
+	col := fcolor(color)
+	v := [4]sdl.Vertex{{position = sdl.FPoint(a + n), color = col}, {position = sdl.FPoint(b + n), color = col}, {position = sdl.FPoint(b - n), color = col}, {position = sdl.FPoint(a - n), color = col}}
+	idx := [6]c.int{0, 1, 2, 0, 2, 3}
+	sdl.RenderGeometry(gfx.ren, nil, &v[0], 4, &idx[0], 6)
+}
+
+// A cubic Bezier curve from `a` to `b` with control points `ca` and `cb`, `w` logical pixels wide.
+draw_bezier :: proc(a, ca, cb, b: Vec2, w: f32, color: Color) {
+	steps := clamp(int((abs(b.x - a.x) + abs(b.y - a.y)) / 8), 8, 48)
+	prev := a
+	for i in 1 ..= steps {
+		t := f32(i) / f32(steps)
+		u := 1 - t
+		p := a * (u * u * u) + ca * (3 * u * u * t) + cb * (3 * u * t * t) + b * (t * t * t)
+		draw_thick_line(prev, p, w, color)
+		// fill the joint so a bend has no notch
+		if i < steps do draw_dot(p, w / 2, color)
+		prev = p
+	}
+}
+
+// A filled circle.
+draw_dot :: proc(p: Vec2, r: f32, color: Color) {
+	n := clamp(int(r * gfx.scale * 1.5), 8, 48)
+	col := fcolor(color)
+	vs := make([]sdl.Vertex, n + 1, context.temp_allocator)
+	idx := make([]c.int, n * 3, context.temp_allocator)
+	vs[0] = {position = sdl.FPoint(p), color = col}
+	for i in 0 ..< n {
+		a := f32(i) / f32(n) * math.TAU
+		vs[i + 1] = {position = sdl.FPoint(p + Vec2{math.cos(a), math.sin(a)} * r), color = col}
+		idx[i * 3], idx[i * 3 + 1], idx[i * 3 + 2] = 0, c.int(i + 1), c.int((i + 1) % n + 1)
+	}
+	sdl.RenderGeometry(gfx.ren, nil, raw_data(vs), c.int(n + 1), raw_data(idx), c.int(n * 3))
+}
+
 // Native dialogs swallow the key / button releases that happen while they are open.
 gfx_reset_input :: proc() {
 	gfx.key_down = {}
