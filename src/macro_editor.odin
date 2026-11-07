@@ -1198,6 +1198,7 @@ me_search :: proc(r: Rect) {
 		ui.focus_id = make_id(fr, "text")
 		ui.caret = me.search_text.n
 		ui.sel_all = false
+		caret_show()
 		me.search_focus = false
 	}
 	list := macro_search(name_str(&me.search_text), me.search_wire ? def_fits_wire : nil)

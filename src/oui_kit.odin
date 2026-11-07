@@ -41,7 +41,7 @@ oslider :: proc(label: string, w: i32, v: ^int, lo, hi: int, tip: Tip, suffix :=
 		if ui.focus_id == fid {
 			// what is typed, in place of the value: a full bar while it is all selected (typing replaces it)
 			oui.element_leaf(uictx, "fill", "bar-fill", {style = ui.sel_all ? "width:100%" : "width:0%"})
-			caret := !ui.sel_all && i32(ui.time * 2) % 2 == 0 ? "|" : " "
+			caret := caret_on() ? "|" : " "
 			oui.label(uictx, "value", fmt.tprintf("%s: %s%s", label == "" ? "Value" : label, name_str(&ui.edit), caret))
 			oui_tip(n, {label, "Type a value, then press Enter. Esc leaves it as it was."})
 			return changed

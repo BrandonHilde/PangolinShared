@@ -66,6 +66,7 @@ UI :: struct {
 	cursor:              MouseCursor,
 
 	caret:               int,
+	caret_t:             f64, // when the caret last moved, or its field took the keyboard: it blinks from then, shown first
 	sel_all:             bool,
 	edit:                Name,
 	popup_result_id:     u32,
@@ -536,6 +537,7 @@ slider_type_begin :: proc(id: u32, v, div: int) {
 	name_set(&ui.edit, slider_value_text(v, div))
 	ui.sel_all = true
 	ui.caret = ui.edit.n
+	caret_show()
 }
 
 // The value typed into a slider, in its own units, kept in range. False if it isn't a number.
@@ -675,7 +677,19 @@ slider :: proc(r: Rect, v: ^int, lo, hi: int, label: string, tip: Tip, suffix :=
 }
 
 // Editing core shared by text and numeric fields. Returns (submitted, blurred, cancelled).
+// The caret shows now, blinking from here: when a field takes the keyboard, and while typing.
+caret_show :: proc() {
+	ui.caret_t = ui.time
+}
+
+// Is the caret in its shown half of the blink?
+caret_on :: proc() -> bool {
+	return i32((ui.time - ui.caret_t) * 2) % 2 == 0
+}
+
 edit_core :: proc(buf: ^Name, r: Rect, id: u32, ascii_only := true) -> (submitted, blurred, cancelled: bool) {
+	before_n, before_caret, before_all := buf.n, ui.caret, ui.sel_all
+	defer if buf.n != before_n || ui.caret != before_caret || ui.sel_all != before_all do caret_show()
 	// focus loss by clicking elsewhere
 	hover := ui_hover(r)
 	if ui.pressed[0] && !hover {
@@ -793,8 +807,9 @@ draw_edit_box :: proc(r: Rect, buf: ^Name, focused: bool) {
 		fill_rect(Rect{r.x + 3 - off, r.y + 2, text_w(s) + 2, r.h - 4}, C_ACTIVE)
 	}
 	text(r.x + 4 - off, r.y + (r.h - FONT_CAP) / 2, s, C_TEXT)
-	if focused && !ui.sel_all && i32(ui.time * 2) % 2 == 0 {
-		fill_rect(Rect{r.x + 4 - off + cw, r.y + 3, 1, r.h - 6}, C_TEXT)
+	if focused && caret_on() {
+		// shown with a selection too (after it), so a field that just took the keyboard says to type
+		fill_rect(Rect{r.x + 4 - off + cw + (ui.sel_all && buf.n > 0 ? 1 : 0), r.y + 3, 1, r.h - 6}, C_TEXT)
 	}
 	clip_end()
 }
@@ -817,6 +832,7 @@ text_field :: proc(r: Rect, buf: ^Name, tip: Tip) -> (changed, submitted: bool) 
 		ui.focus_id = id
 		ui.sel_all = true
 		ui.caret = buf.n
+		caret_show()
 	}
 	draw_edit_box(r, buf, ui.focus_id == id)
 	return
@@ -855,6 +871,7 @@ field_int :: proc(r: Rect, v: ^int, lo, hi: int, tip: Tip) -> bool {
 			name_set(&ui.edit, fmt.tprintf("%d", v^))
 			ui.sel_all = true
 			ui.caret = ui.edit.n
+			caret_show()
 		}
 		if hover && ui.wheel != 0 {
 			nv := clamp(v^ + (ui.wheel > 0 ? 1 : -1), lo, hi)
