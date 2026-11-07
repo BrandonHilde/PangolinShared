@@ -515,8 +515,48 @@ checkbox :: proc(x, y: i32, label: string, v: ^bool, tip: Tip) -> bool {
 	return false
 }
 
+// Typing a slider's value: right-click a slider and it becomes a field holding its value, selected. Enter or a click
+// elsewhere applies what was typed, Esc leaves the value as it was. The value is typed as the slider shows it (with
+// `div`), and a suffix such as "px" or "%" may be left on.
+SLIDER_TYPE_TIP :: "Right-click to type an exact value."
+
+slider_value_text :: proc(v, div: int) -> string {
+	return div > 1 ? fmt.tprintf("%.*f", div >= 100 ? 2 : 1, f32(v) / f32(div)) : fmt.tprintf("%d", v)
+}
+
+// Enter and Esc finish typing a slider's value and go no further: a dialog must not take them as OK or Cancel.
+slider_type_eat_keys :: proc() {
+	gfx.key_pressed[key_scancode(.ENTER)] = false
+	gfx.key_pressed[key_scancode(.KP_ENTER)] = false
+	gfx.key_pressed[key_scancode(.ESCAPE)] = false
+}
+
+slider_type_begin :: proc(id: u32, v, div: int) {
+	ui.focus_id = id
+	name_set(&ui.edit, slider_value_text(v, div))
+	ui.sel_all = true
+	ui.caret = ui.edit.n
+}
+
+// The value typed into a slider, in its own units, kept in range. False if it isn't a number.
+slider_type_parse :: proc(s: string, div, lo, hi: int) -> (v: int, ok: bool) {
+	t := strings.trim_space(s)
+	// leave off a suffix: "70px", "50 %"
+	end := len(t)
+	for end > 0 && !(t[end - 1] >= '0' && t[end - 1] <= '9') && t[end - 1] != '.' do end -= 1
+	t = strings.trim_space(t[:end])
+	f := strconv.parse_f64(t) or_return
+	if math.is_nan(f) || math.is_inf(f) do return
+	return clamp(int(math.round(f * f64(max(div, 1)))), lo, hi), true
+}
+
+// The tooltip of a slider, with how to type its value.
+slider_tip :: proc(tip: Tip) -> Tip {
+	return {tip.title, tip.desc == "" ? SLIDER_TYPE_TIP : fmt.tprintf("%s %s", tip.desc, SLIDER_TYPE_TIP)}
+}
+
 // Horizontal slider with value drawn inside. `suffix` is appended to the value
-// ("%", "px"); `curve` > 1 gives finer control at the low end (brush sizes).
+// ("%", "px"); `curve` > 1 gives finer control at the low end (brush sizes). Right-click types the value.
 // Round values that sliders with a curve (sizes) step through while Shift is held.
 SLIDER_STAIRS := [?]int{
 	1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250, 300, 400, 500,
@@ -568,7 +608,24 @@ slider :: proc(r: Rect, v: ^int, lo, hi: int, label: string, tip: Tip, suffix :=
 	}
 	tint := tint_in == {} ? C_ACCENT : tint_in
 	id := make_id(r, label)
-	_, held, hover := button_behavior(id, r, tip)
+	if ui.focus_id == id {
+		// typing the value (right-click started it)
+		sub, blur, cancel := edit_core(&ui.edit, r, id)
+		if sub || cancel do slider_type_eat_keys()
+		changed := false
+		if sub || blur {
+			if nv, ok := slider_type_parse(name_str(&ui.edit), div, lo, hi); ok && nv != v^ {
+				v^ = on_step(nv, lo, hi, step)
+				changed = true
+			}
+		}
+		draw_edit_box(r, &ui.edit, ui.focus_id == id)
+		return changed
+	}
+	_, held, hover := button_behavior(id, r, slider_tip(tip))
+	if hover && ui.pressed[1] {
+		slider_type_begin(id, v^, div)
+	}
 	changed := false
 	if held || (hover && ui.pressed[0]) {
 		t := clamp(f32(ui.mx - r.x) / f32(max(r.w - 1, 1)), 0, 1)

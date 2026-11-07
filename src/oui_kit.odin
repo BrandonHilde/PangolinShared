@@ -19,7 +19,7 @@ width_style :: proc(w: i32) -> string {
 	return w > 0 ? fmt.tprintf("--w:%dpx", w) : ""
 }
 
-// Slider with the value inside it, like `slider`.
+// Slider with the value inside it, like `slider`. Right-click types the value.
 oslider :: proc(label: string, w: i32, v: ^int, lo, hi: int, tip: Tip, suffix := "", curve: f32 = 1, div := 1, key := "", class := "", id := "") -> bool {
 	k := key != "" ? key : fmt.tprintf("s:%s", label)
 	n := oui.element(uictx, k, "slider-bar", {id = id, class = class, style = width_style(w), interactive = true})
@@ -27,6 +27,29 @@ oslider :: proc(label: string, w: i32, v: ^int, lo, hi: int, tip: Tip, suffix :=
 	oui_last = n
 	r := oui_rect(n)
 	changed := false
+	// the node is kept from frame to frame, so it tells this slider apart while its value is typed
+	fid := make_id({}, fmt.tprintf("oslider%p", n))
+	if ui.focus_id == fid {
+		sub, blur, cancel := edit_core(&ui.edit, r, fid)
+		if sub || cancel do slider_type_eat_keys()
+		if sub || blur {
+			if nv, ok := slider_type_parse(name_str(&ui.edit), div, lo, hi); ok && nv != v^ {
+				v^ = nv
+				changed = true
+			}
+		}
+		if ui.focus_id == fid {
+			// what is typed, in place of the value: a full bar while it is all selected (typing replaces it)
+			oui.element_leaf(uictx, "fill", "bar-fill", {style = ui.sel_all ? "width:100%" : "width:0%"})
+			caret := !ui.sel_all && i32(ui.time * 2) % 2 == 0 ? "|" : " "
+			oui.label(uictx, "value", fmt.tprintf("%s: %s%s", label == "" ? "Value" : label, name_str(&ui.edit), caret))
+			oui_tip(n, {label, "Type a value, then press Enter. Esc leaves it as it was."})
+			return changed
+		}
+	}
+	if n.hovered && ui.pressed[1] {
+		slider_type_begin(fid, v^, div)
+	}
 	if n.active && r.w > 1 {
 		t := clamp(f32(ui.mx - r.x) / f32(max(r.w - 1, 1)), 0, 1)
 		if curve != 1 do t = math.pow(t, curve)
@@ -54,7 +77,7 @@ oslider :: proc(label: string, w: i32, v: ^int, lo, hi: int, tip: Tip, suffix :=
 	oui.element_leaf(uictx, "handle", "bar-handle", {style = fmt.tprintf("left:%.1fpx", hx)})
 	vs := div > 1 ? fmt.tprintf("%.*f", div >= 100 ? 2 : 1, f32(v^) / f32(div)) : fmt.tprintf("%d", v^)
 	oui.label(uictx, "value", label == "" ? fmt.tprintf("%s%s", vs, suffix) : fmt.tprintf("%s: %s%s", label, vs, suffix))
-	oui_tip(n, tip)
+	oui_tip(n, slider_tip(tip))
 	return changed
 }
 
