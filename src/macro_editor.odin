@@ -7,7 +7,9 @@ import "core:strings"
 
 // The node editor, in the style of ComfyUI: macros are built as graphs of nodes on a canvas that pans and zooms.
 //
-//   - The Document wire (white) runs from Start through the action nodes, in the order they run.
+//   - The Document wire (white) runs from Start through the action nodes, in the order they run. Drag a second wire
+//     out of a node to start a branch: branches run top to bottom (numbered on the canvas), each from the document as
+//     it was where the wire splits. Branch 1 keeps its changes; the others are side trips (exports) that are put back.
 //   - Every setting is a widget on its node, with a socket on the left: wire a value node's output into it and the
 //     setting takes the wired value instead.
 //   - Drag from a socket to connect; drop a wire on empty canvas to pick a node that fits it. Drag a wire off an input
@@ -210,21 +212,36 @@ to_graph :: proc(s: Vec2) -> Vec2 {
 	return (s - me.origin) / me.zoom + me.pan
 }
 
+// The settings a node shows, in order (temp memory): all but those that only apply to another choice, unless wired.
+// With no node (one about to be added), as its defaults would show.
 @(private = "file")
-node_rows :: proc(def: ^Macro_Def) -> int {
-	return def == nil ? 1 : len(def.settings)
+shown_rows :: proc(n: ^Macro_Node, def: ^Macro_Def) -> []int {
+	out := make([dynamic]int, context.temp_allocator)
+	if def == nil do return out[:]
+	vals: []Macro_Value
+	if n != nil {
+		vals = macro_node_own_values(n, def)
+	} else {
+		vals = make([]Macro_Value, len(def.settings), context.temp_allocator)
+		for s, i in def.settings do vals[i] = s.def
+	}
+	for &s, i in def.settings {
+		if macro_setting_shown(def, &s, vals) || (n != nil && macro_wire_from(me.m, n.id, s.key) != 0) do append(&out, i)
+	}
+	return out[:]
 }
 
 @(private = "file")
-node_h :: proc(def: ^Macro_Def) -> f32 {
-	return ME_HEAD_H + f32(node_rows(def)) * ME_ROW_H + (node_rows(def) > 0 ? 6 : 0)
+node_h :: proc(n: ^Macro_Node, def: ^Macro_Def) -> f32 {
+	rows := len(shown_rows(n, def))
+	return ME_HEAD_H + f32(rows) * ME_ROW_H + (rows > 0 ? 6 : 0)
 }
 
 // The node's box on screen.
 @(private = "file")
 node_box :: proc(n: ^Macro_Node, def: ^Macro_Def) -> FRect {
 	p := to_screen({n.x, n.y})
-	return {p.x, p.y, ME_NODE_W * me.zoom, node_h(def) * me.zoom}
+	return {p.x, p.y, ME_NODE_W * me.zoom, node_h(n, def) * me.zoom}
 }
 
 // Where a socket is on screen.
@@ -234,10 +251,8 @@ port_pos :: proc(n: ^Macro_Node, def: ^Macro_Def, p: Me_Port) -> Vec2 {
 	head := b.y + ME_HEAD_H * me.zoom / 2
 	if p.out do return {b.x + b.w, head}
 	if p.key == "" do return {b.x, head}
-	if def != nil {
-		for s, i in def.settings {
-			if s.key == p.key do return {b.x, b.y + (ME_HEAD_H + f32(i) * ME_ROW_H + ME_ROW_H / 2) * me.zoom}
-		}
+	for si, row in shown_rows(n, def) {
+		if def.settings[si].key == p.key do return {b.x, b.y + (ME_HEAD_H + f32(row) * ME_ROW_H + ME_ROW_H / 2) * me.zoom}
 	}
 	return {b.x, head}
 }
@@ -278,7 +293,7 @@ node_ports :: proc(n: ^Macro_Node, def: ^Macro_Def) -> []Me_Port {
 	case .Value:
 		append(&out, Me_Port{n.id, true, "out"})
 	}
-	for s in def.settings do append(&out, Me_Port{n.id, false, s.key})
+	for si in shown_rows(n, def) do append(&out, Me_Port{n.id, false, def.settings[si].key})
 	return out[:]
 }
 
@@ -290,7 +305,8 @@ ports_fit :: proc(a, b: Me_Port) -> bool {
 	ot, odoc, ook := port_type(o)
 	it, idoc, iok := port_type(i)
 	if !ook || !iok || odoc != idoc do return false
-	return odoc || macro_can_feed(ot, it)
+	if odoc do return !macro_link_loops(me.m, o.node, i.node)
+	return macro_can_feed(ot, it)
 }
 
 @(private = "file")
@@ -550,7 +566,7 @@ me_frame_all :: proc() {
 	if len(me.m.nodes) == 0 do return
 	lo, hi := Vec2{1e9, 1e9}, Vec2{-1e9, -1e9}
 	for &n in me.m.nodes {
-		h := node_h(macro_def_find(n.kind))
+		h := node_h(&n, macro_def_find(n.kind))
 		lo = {min(lo.x, n.x), min(lo.y, n.y)}
 		hi = {max(hi.x, n.x + ME_NODE_W), max(hi.y, n.y + h)}
 	}
@@ -598,22 +614,26 @@ me_add_from_library :: proc(d: ^Macro_Def) {
 	if after != nil do at = {after.x + ME_NODE_W + 40, after.y}
 	at = me_free_spot(at, macro_def_find(d.id))
 	after_id := after != nil ? after.id : 0
-	next := after != nil ? macro_next(me.m, after.id) : -1
+	next := -1
+	if after != nil {
+		// one step after it: the new one goes in between; several (branches): the new one starts another branch
+		if outs := macro_nexts(me.m, after.id); len(outs) == 1 do next = outs[0]
+	}
 	id := me_add(d.id, at)
 	if id == 0 || after_id == 0 do return
 	macro_link(me.m, after_id, id)
-	if next > 0 do macro_link(me.m, id, next)
+	if next > 0 do macro_link(me.m, id, next) // this replaces the wire that went from `after` into it
 }
 
 // The first place at or below `at` where a node of kind `def` overlaps no other.
 @(private = "file")
 me_free_spot :: proc(at: Vec2, def: ^Macro_Def) -> Vec2 {
 	p := at
-	h := node_h(def)
+	h := node_h(nil, def)
 	for _ in 0 ..< 100 {
 		moved := false
 		for &n in me.m.nodes {
-			nh := node_h(macro_def_find(n.kind))
+			nh := node_h(&n, macro_def_find(n.kind))
 			if p.x < n.x + ME_NODE_W + 10 && p.x + ME_NODE_W + 10 > n.x && p.y < n.y + nh + 16 && p.y + h + 16 > n.y {
 				p.y = n.y + nh + 24
 				moved = true
@@ -691,6 +711,21 @@ me_canvas :: proc(r: Rect) {
 		if a == nil || b == nil do continue
 		draw_wire(port_pos(a, macro_def_find(a.kind), {f.from, true, ""}), port_pos(b, macro_def_find(b.kind), {f.to, false, ""}), DOC_COLOR)
 	}
+	// where the Document wire splits, a number by each branch says the order they run in
+	for &n in me.m.nodes {
+		outs := macro_nexts(me.m, n.id)
+		if len(outs) < 2 do continue
+		for o, i in outs {
+			t := macro_node(me.m, o)
+			if t == nil do continue
+			p := port_pos(t, macro_def_find(t.kind), {o, false, ""}) - {18 * me.zoom, 0}
+			rad := 6.5 * me.zoom
+			draw_dot(p, rad, DOC_COLOR)
+			label := fmt.tprintf("%d", i + 1)
+			fs := i32(math.round(12 * me.zoom))
+			if fs >= 6 do draw_text(p.x - text_width(label, fs) / 2, p.y - text_cap(fs) / 2, label, C_BG, fs)
+		}
+	}
 	for &n in me.m.nodes do me_node(&n)
 	if me.drag == .Wire {
 		n := macro_node(me.m, me.wire.node)
@@ -714,7 +749,7 @@ me_canvas :: proc(r: Rect) {
 		text(r.x + (r.w - text_w(hint)) / 2, r.y + r.h - 30, hint, C_TEXT_DIM)
 	}
 	text(r.x + 8, r.y + r.h - 16, fmt.tprintf("%d%%", int(math.round(me.zoom * 100))), C_TEXT_OFF)
-	if me.search do me_search(search_r)
+	if me.search do me_search(me_search_rect()) // where it is now: the input above may just have opened it
 }
 
 @(private = "file")
@@ -733,9 +768,9 @@ on_widget :: proc(p: Vec2) -> bool {
 	def := macro_def_find(n.kind)
 	if def == nil do return false
 	b := node_box(n, def)
-	for s, i in def.settings {
-		if macro_wire_from(me.m, n.id, s.key) != 0 do continue
-		rr := row_rect(b, i)
+	for si, row in shown_rows(n, def) {
+		if macro_wire_from(me.m, n.id, def.settings[si].key) != 0 do continue
+		rr := row_rect(b, row)
 		if in_rect(rr, i32(p.x), i32(p.y)) do return true
 	}
 	return false
@@ -790,7 +825,7 @@ me_canvas_input :: proc(r: Rect, mouse: Vec2, inside: bool) {
 			lo, hi := Vec2{min(a.x, b.x), min(a.y, b.y)}, Vec2{max(a.x, b.x), max(a.y, b.y)}
 			if !ui.shift do clear(&me.sel)
 			for &n in me.m.nodes {
-				h := node_h(macro_def_find(n.kind))
+				h := node_h(&n, macro_def_find(n.kind))
 				if n.x < hi.x && n.x + ME_NODE_W > lo.x && n.y < hi.y && n.y + h > lo.y && !is_selected(n.id) do append(&me.sel, n.id)
 			}
 			me.drag = .None
@@ -893,7 +928,7 @@ me_node :: proc(n: ^Macro_Node) {
 		draw_text(b.x + b.w - 14 * z - text_width(ts, fs), b.y + (ME_HEAD_H * z - text_cap(fs)) / 2, ts, with_alpha(WHITE, 150), fs)
 	}
 	if def != nil {
-		for &s, i in def.settings do me_row(n, def, &s, i, b, fs)
+		for si, row in shown_rows(n, def) do me_row(n, def, &def.settings[si], si, row, b, fs)
 	}
 	clip_end()
 	if def != nil {
@@ -926,8 +961,8 @@ me_node :: proc(n: ^Macro_Node) {
 
 // One setting of a node: its widget at 100%, else its value as text; a wired setting shows where it comes from.
 @(private = "file")
-me_row :: proc(n: ^Macro_Node, def: ^Macro_Def, s: ^Macro_Setting, i: int, b: FRect, fs: i32) {
-	rr := row_rect(b, i)
+me_row :: proc(n: ^Macro_Node, def: ^Macro_Def, s: ^Macro_Setting, i, row: int, b: FRect, fs: i32) {
+	rr := row_rect(b, row)
 	from := macro_wire_from(me.m, n.id, s.key)
 	if from != 0 || me.zoom != 1 {
 		txt: string
@@ -1263,7 +1298,8 @@ me_side :: proc(r: Rect) {
 	}
 	y += 8
 	vals := macro_node_own_values(n, def)
-	for &s, i in def.settings {
+	for i in shown_rows(n, def) {
+		s := &def.settings[i]
 		row := Rect{props.x, y, props.w, 16}
 		if from := macro_wire_from(me.m, n.id, s.key); from != 0 {
 			src := macro_node(me.m, from)
@@ -1274,7 +1310,7 @@ me_side :: proc(r: Rect) {
 				me.dirty = true
 			}
 		} else {
-			setting_widget(n, &s, i, row, vals[i])
+			setting_widget(n, s, i, row, vals[i])
 		}
 		y += 22
 	}

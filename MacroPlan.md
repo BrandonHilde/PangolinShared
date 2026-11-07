@@ -248,6 +248,15 @@ list. That way a command added later can't be silently left out.
   - Run (F5) shows an error outline on the node that failed. Save is Ctrl+S, and the macro is also saved when the
     editor closes or another macro is picked.
   - `src/gfx.odin` gained `draw_thick_line`, `draw_bezier` and `draw_dot`.
+- **Done: branches.** A node can send the Document wire to several nodes. Branches run top to bottom and are numbered
+  on the canvas. Each starts from the document as it was at the split: branch 1 keeps its changes, and the others are
+  put back afterwards, so they suit exports. Apps provide `macro_snapshot`, `macro_restore` and `macro_snapshot_free`.
+- **Done: easier layers and files in Paints.**
+  - Pick Layer picks by name, above or below, top or bottom, or by number.
+  - Export can export the whole image or only the active layer.
+  - Save and Export each have a file setting with a ... picker.
+  - Settings with `only = "key=choice"` show only while that choice is picked.
+  - Typing on the canvas searches, and choices are listed too ("soft light" → Layer Blend Mode set to Soft Light).
 - **Done, part of step 5: value nodes and value wires.** `wire a b.key` lines in the file. If, Repeat and For each are
   still to come.
 - **Not done yet.**

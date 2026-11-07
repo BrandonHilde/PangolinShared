@@ -20,10 +20,17 @@ import "core:strings"
 //   macro_info      :: proc(what: int) -> f64                // a number about the open document, by MACRO_INFO index
 //   macro_preview   :: proc(r: Rect)                         // draws the open document small, for the editor
 //   macro_renamed   :: proc(old, new: string)                // a macro was renamed: things that hold it by name follow
+//   macro_snapshot  :: proc() -> rawptr                      // a copy of the document, to start each branch from (nil: none)
+//   macro_restore   :: proc(snap: rawptr)                    // puts the document back as it was in the copy
+//   macro_snapshot_free :: proc(snap: rawptr)
 //
-// The Document wire runs from the Start node through the action nodes and sets their order (`flows`). Value wires
-// (`wires`) feed a node's settings from value nodes (Number, Color, Math, Random, Document Info ...), each of which is
-// worked out once per run. Every node keeps its settings as text (key = value), so a file always loads, even with
+// The Document wire runs from the Start node through the action nodes and sets their order (`flows`). It can split:
+// a node may send it to several nodes, which run as branches, top to bottom, each starting from the document as it was
+// where the wire split. Branch 1 (the top one) is the main line: the document keeps its changes. The others are side
+// trips, for exports and the like: their changes to the document are put back when they end. So one macro can export
+// the image, then pick a layer and export that, and leave the document as it was. Value wires (`wires`)
+// feed a node's settings from value nodes (Number, Color, Math, Random, Document Info ...), each of which is worked
+// out once per branch. Every node keeps its settings as text (key = value), so a file always loads, even with
 // nodes or settings this version doesn't know.
 
 MACRO_MAX_STEPS :: 10000 // nodes one run may execute
@@ -54,6 +61,7 @@ Macro_Setting :: struct {
 	def:     Macro_Value,
 	help:    string,
 	browse:  bool, // Text: a file path, with a button that picks it in a save window
+	only:    string, // "key=choice|choice": shown only while that Choice setting is one of those
 }
 
 Macro_Kind :: enum u8 {
@@ -83,7 +91,7 @@ Macro_Node :: struct {
 	args: [dynamic]Macro_Arg,
 }
 
-// The Document wire goes from node `from` to node `to`. A node has at most one going out and one coming in.
+// The Document wire goes from node `from` to node `to`. A node has at most one coming in, and any number going out.
 Macro_Flow :: struct {
 	from, to: int,
 }
@@ -197,10 +205,22 @@ macro_arg :: proc(n: ^Macro_Node, key: string) -> (string, bool) {
 	return "", false
 }
 
-// Joins `from` to `to` with the Document wire, replacing the wires that left `from` and reached `to` before.
+// Joins `from` to `to` with the Document wire, replacing the wire that reached `to` before. Wires already leaving `from`
+// stay: they are other branches.
 macro_link :: proc(m: ^Macro, from, to: int) {
-	macro_unlink(m, from, to)
+	macro_unlink(m, 0, to)
 	append(&m.flows, Macro_Flow{from, to})
+}
+
+// Would joining `from` to `to` close a loop (is `to` already before `from` on the wire)?
+macro_link_loops :: proc(m: ^Macro, from, to: int) -> bool {
+	at := from
+	for _ in 0 ..< len(m.nodes) + 1 {
+		if at == to do return true
+		at = macro_prev(m, at)
+		if at == 0 do return false
+	}
+	return true
 }
 
 // Removes the Document wires leaving `from` and reaching `to` (either may be 0: none).
@@ -210,10 +230,28 @@ macro_unlink :: proc(m: ^Macro, from, to: int) {
 	}
 }
 
-// The node the Document wire goes to after `id`, or -1.
+// The node the Document wire goes to after `id` (the top one, if it splits), or -1.
 macro_next :: proc(m: ^Macro, id: int) -> int {
-	for f in m.flows do if f.from == id do return f.to
-	return -1
+	outs := macro_nexts(m, id)
+	return len(outs) > 0 ? outs[0] : -1
+}
+
+// Every node the Document wire goes to after `id`, in the order the branches run: top to bottom (temp memory).
+macro_nexts :: proc(m: ^Macro, id: int) -> []int {
+	out := make([dynamic]int, context.temp_allocator)
+	for f in m.flows do if f.from == id do append(&out, f.to)
+	key :: proc(m: ^Macro, id: int) -> [2]f32 {
+		n := macro_node(m, id)
+		return n != nil ? {n.y, n.x} : {}
+	}
+	for i in 1 ..< len(out) {
+		for j := i; j > 0; j -= 1 {
+			a, b := key(m, out[j - 1]), key(m, out[j])
+			if a.x < b.x || (a.x == b.x && a.y <= b.y) do break
+			out[j - 1], out[j] = out[j], out[j - 1]
+		}
+	}
+	return out[:]
 }
 
 // The node the Document wire comes from into `id`, or 0.
@@ -255,8 +293,8 @@ macro_def_find :: proc(id: string) -> ^Macro_Def {
 	return nil
 }
 
-// The action nodes from Start to the end of the Document wire, in order. Fails on a loop, an unknown node or a wire
-// to nothing.
+// The action nodes on the Document wire from Start, in the order they run: each branch to its end before the next.
+// Fails on a loop, an unknown node or a wire to nothing.
 macro_chain :: proc(m: ^Macro) -> (chain: []^Macro_Node, ok: bool, msg: string) {
 	out := make([dynamic]^Macro_Node, context.temp_allocator)
 	start := macro_start(m)
@@ -266,8 +304,12 @@ macro_chain :: proc(m: ^Macro) -> (chain: []^Macro_Node, ok: bool, msg: string) 
 	case -2:
 		return nil, false, "it has more than one Start node"
 	}
-	at := macro_next(m, start)
-	for at >= 0 {
+	// depth first, the top branch first
+	stack := make([dynamic]int, context.temp_allocator)
+	outs := macro_nexts(m, start)
+	#reverse for o in outs do append(&stack, o)
+	for len(stack) > 0 {
+		at := pop(&stack)
 		n := macro_node(m, at)
 		if n == nil do return nil, false, "a wire leads to a node that isn't there"
 		def := macro_def_find(n.kind)
@@ -276,9 +318,24 @@ macro_chain :: proc(m: ^Macro) -> (chain: []^Macro_Node, ok: bool, msg: string) 
 		for prev in out do if prev == n do return nil, false, "its Document wire goes round in a loop"
 		if len(out) >= MACRO_MAX_STEPS do return nil, false, "it has too many steps"
 		append(&out, n)
-		at = macro_next(m, at)
+		nexts := macro_nexts(m, at)
+		#reverse for o in nexts do append(&stack, o)
 	}
 	return out[:], true, ""
+}
+
+// Is setting `s` shown, given the node's values (`only`: while another setting has one of the choices listed)?
+macro_setting_shown :: proc(def: ^Macro_Def, s: ^Macro_Setting, vals: []Macro_Value) -> bool {
+	if s.only == "" do return true
+	key, _, choices := strings.partition(s.only, "=")
+	for &o, i in def.settings {
+		if o.key != key || o.type != .Choice do continue
+		cur := int(vals[i].num)
+		if cur < 0 || cur >= len(o.choices) do return false
+		for c in strings.split(choices, "|", context.temp_allocator) do if strings.equal_fold(c, o.choices[cur]) do return true
+		return false
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -541,23 +598,57 @@ macro_run :: proc(m: ^Macro) -> (ok: bool, msg: string, at: int) {
 	if m.app != macro_app_id() do return false, fmt.tprintf("it was made in Pangolin %s", m.app), 0
 	chain, cok, cmsg := macro_chain(m)
 	if !cok do return false, cmsg, 0
+	_ = chain
 	if bok, bmsg := macro_begin(); !bok do return false, bmsg, 0
 	macro_running = true
 	defer macro_running = false
 	run := macro_run_state(m)
-	for n in chain {
-		def := macro_def_find(n.kind)
-		args, aok, amsg := macro_node_values(&run, n, def)
-		if !aok {
-			macro_end(false)
-			return false, fmt.tprintf("%s: %s", def.name, amsg), n.id
-		}
-		if eok, emsg := macro_exec(def, args); !eok {
-			macro_end(false)
-			return false, fmt.tprintf("%s: %s", def.name, emsg != "" ? emsg : "it didn't work"), n.id
+	ok, msg, at = macro_run_from(&run, macro_start(m))
+	macro_end(ok)
+	return
+}
+
+// Runs the steps after node `id`. Where the Document wire splits, each branch starts from the document as it was there,
+// and the document ends as branch 1 left it.
+@(private = "file")
+macro_run_from :: proc(r: ^Macro_Run, id: int) -> (ok: bool, msg: string, at: int) {
+	cur := id
+	for {
+		outs := macro_nexts(r.m, cur)
+		switch len(outs) {
+		case 0:
+			return true, "", 0
+		case 1:
+			if sok, smsg, sat := macro_step(r, outs[0]); !sok do return sok, smsg, sat
+			cur = outs[0]
+		case:
+			split := macro_snapshot()
+			defer if split != nil do macro_snapshot_free(split)
+			main: rawptr // the document as branch 1 left it
+			defer if main != nil do macro_snapshot_free(main)
+			for o, i in outs {
+				if i > 0 && split != nil do macro_restore(split)
+				clear(&r.cache) // values are worked out again for each branch: the document may differ
+				if sok, smsg, sat := macro_step(r, o); !sok do return sok, smsg, sat
+				if bok, bmsg, bat := macro_run_from(r, o); !bok do return bok, bmsg, bat
+				if i == 0 do main = macro_snapshot()
+			}
+			if main != nil do macro_restore(main)
+			return true, "", 0
 		}
 	}
-	macro_end(true)
+}
+
+// Runs one step.
+@(private = "file")
+macro_step :: proc(r: ^Macro_Run, id: int) -> (ok: bool, msg: string, at: int) {
+	n := macro_node(r.m, id)
+	def := macro_def_find(n.kind)
+	args, aok, amsg := macro_node_values(r, n, def)
+	if !aok do return false, fmt.tprintf("%s: %s", def.name, amsg), id
+	if eok, emsg := macro_exec(def, args); !eok {
+		return false, fmt.tprintf("%s: %s", def.name, emsg != "" ? emsg : "it didn't work"), id
+	}
 	return true, "", 0
 }
 
