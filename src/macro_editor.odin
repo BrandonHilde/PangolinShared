@@ -1038,7 +1038,32 @@ setting_widget :: proc(n: ^Macro_Node, s: ^Macro_Setting, i: int, r: Rect, v: Ma
 		lw := text_w(s.name) + 8
 		text(r.x, r.y + (r.h - FONT_CAP) / 2, s.name, C_TEXT_DIM)
 		bw: i32 = s.browse ? 24 : 0
-		if t, changed := text_box(n, s, Rect{r.x + lw, r.y, r.w - lw - bw, r.h}, v.text, tip); changed do set(n, s, {text = t})
+		sw: i32 = s.suggest != "" ? 20 : 0
+		fw := r.w - lw - bw - sw
+		if t, changed := text_box(n, s, Rect{r.x + lw, r.y, fw, r.h}, v.text, tip); changed do set(n, s, {text = t})
+		if s.suggest != "" {
+			// a list to pick from (the document's layers, say), next to the field
+			dr := Rect{r.x + lw + fw + 2, r.y, 18, r.h}
+			did := make_id(dr, fmt.tprintf("suggest%d.%s", n.id, s.key))
+			clicked, held, hover := button_behavior(did, dr, {"Pick from the list", fmt.tprintf("Pick one of the open document's %s, instead of typing it.", s.suggest)})
+			ctl_state(dr, hover, held || (popup.open && popup.owner == did), false, true)
+			icon(.Down, dr.x + (dr.w - ICON_SIZE) / 2, dr.y + (dr.h - ICON_SIZE) / 2, C_TEXT_DIM)
+			if clicked {
+				items := macro_suggest(s.suggest)
+				popup_begin(did, Rect{r.x + lw, r.y, fw + 20, r.h}, fw + 20)
+				for it, i in items do popup_item(it, i, checked = strings.equal_fold(it, v.text))
+				if len(items) == 0 do popup_item(fmt.tprintf("No %s", s.suggest), -1, enabled = false)
+			}
+			if ui.popup_result_id == did {
+				items := macro_suggest(s.suggest)
+				if i := ui.popup_result_val; i >= 0 && i < len(items) {
+					set(n, s, {text = items[i]})
+					me.edit_node = 0
+					ui.focus_id = 0
+				}
+				ui.popup_result_id = 0
+			}
+		}
 		BROWSE_TIP :: "Pick the folder and the file name in a file window. {name} in the name becomes the document's name when the macro runs, and {ext} the format's extension."
 		if s.browse && button(Rect{r.x + r.w - 20, r.y, 20, r.h}, "...", {"Choose the file", BROWSE_TIP}) {
 			initial := v.text != "" ? path_basename(v.text) : "{name}"

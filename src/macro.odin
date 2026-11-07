@@ -23,6 +23,7 @@ import "core:strings"
 //   macro_snapshot  :: proc() -> rawptr                      // a copy of the document, to start each branch from (nil: none)
 //   macro_restore   :: proc(snap: rawptr)                    // puts the document back as it was in the copy
 //   macro_snapshot_free :: proc(snap: rawptr)
+//   macro_suggest   :: proc(what: string) -> []string        // values to offer for a Text setting's `suggest` ("layers": the layer names)
 //
 // The Document wire runs from the Start node through the action nodes and sets their order (`flows`). It can split:
 // a node may send it to several nodes, which run as branches, top to bottom, each starting from the document as it was
@@ -62,6 +63,7 @@ Macro_Setting :: struct {
 	help:    string,
 	browse:  bool, // Text: a file path, with a button that picks it in a save window
 	only:    string, // "key=choice|choice": shown only while that Choice setting is one of those
+	suggest: string, // Text: a list the app offers to pick from (macro_suggest), such as "layers"; typing still works
 }
 
 Macro_Kind :: enum u8 {
