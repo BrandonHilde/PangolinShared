@@ -257,6 +257,12 @@ list. That way a command added later can't be silently left out.
   - Save and Export each have a file setting with a ... picker.
   - Settings with `only = "key=choice"` show only while that choice is picked.
   - Typing on the canvas searches, and choices are listed too ("soft light" → Layer Blend Mode set to Soft Light).
+- **Done: live layer effects in Paints** (`PangolinPaints/src/layerfx.odin`, 2026-11-07).
+  - A layer can hold up to four macros, run on a copy of the layer whenever it changes.
+  - Their result is drawn in place of the layer's pixels.
+  - Steps that reach outside the layer are refused.
+  - The effects are saved in `.ppnt` version 7, along with their macros.
+  - `macro_lib_gen` tells effects that a macro changed.
 - **Done, part of step 5: value nodes and value wires.** `wire a b.key` lines in the file. If, Repeat and For each are
   still to come.
 - **Not done yet.**
