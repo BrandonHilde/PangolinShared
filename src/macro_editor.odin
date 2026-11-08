@@ -1003,9 +1003,14 @@ setting_widget :: proc(n: ^Macro_Node, s: ^Macro_Setting, i: int, r: Rect, v: Ma
 	}
 	switch s.type {
 	case .Number:
-		if s.hi > s.lo && s.hi - s.lo <= 2000 {
-			iv := int(math.round(v.num))
-			if slider(r, &iv, int(s.lo), int(s.hi), s.name, tip, s.suffix, 1, s.div > 1 ? int(s.div) : 1) do set(n, s, {num = f64(iv)})
+		// the slider counts whole steps: with a step of 0.1 it counts tenths and shows them as decimals
+		k := s.step > 0 && s.step < 1 ? int(math.round(1 / s.step)) : 1
+		lo, hi := int(math.ceil(s.lo * f64(k) - 1e-9)), int(math.floor(s.hi * f64(k) + 1e-9))
+		curve := s.curve > 0 ? s.curve : 1
+		if s.hi > s.lo && (hi - lo <= 2000 || curve > 1) {
+			iv := int(math.round(v.num * f64(k)))
+			div := k > 1 ? k : (s.div > 1 ? int(s.div) : 1)
+			if slider(r, &iv, lo, hi, s.name, tip, s.suffix, curve, div) do set(n, s, {num = f64(iv) / f64(k)})
 		} else if s.hi > s.lo {
 			lw := text_w(s.name) + 8
 			text(r.x, r.y + (r.h - FONT_CAP) / 2, s.name, C_TEXT_DIM)

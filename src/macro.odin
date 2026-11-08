@@ -57,6 +57,8 @@ Macro_Setting :: struct {
 	type:    Macro_Type,
 	lo, hi:  f64, // Number range (lo == hi: any number)
 	div:     f64, // a Number is shown as num / div (0: as it is)
+	step:    f64, // a Number's slider moves in steps this size, such as 0.1 (0: whole numbers)
+	curve:   f32, // a Number's slider gives more room to small values the higher this is (0 or 1: even)
 	suffix:  string,
 	choices: []string,
 	def:     Macro_Value,
@@ -81,6 +83,7 @@ Macro_Trigger :: enum u8 {
 
 MACRO_TRIGGER_NAMES := [?]string{"On Hotkey", "On Paint", "After a Pause", "Every N Seconds", "On Demand"}
 MACRO_TRIGGER_SECONDS :: 2 // Seconds' default
+MACRO_TRIGGER_MIN_SECONDS :: 0.2 // never 0: a timed trigger always waits a little
 
 // The app runs macros as live layer effects (Paints), so the Start node offers their triggers. Set it before the
 // macros are first used: macro_shared_defs reads it once.
@@ -385,7 +388,7 @@ macro_shared_defs :: proc() -> []Macro_Def {
 	if macro_layer_effects {
 		shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = START_HELP + " Its Trigger sets when the macro runs."},
 			{key = "trigger", name = "Trigger", type = .Choice, choices = MACRO_TRIGGER_NAMES[:], no_wire = true, help = "When the macro runs. On Hotkey: when you run it, from a tool group's key, the Macros menu or the Macros window. The others make it a live layer effect, which runs on the layers it's added to: On Paint after every change to the layer, After a Pause once you've left the layer alone for Seconds, Every N Seconds at most once every Seconds while the layer keeps changing, On Demand only when it's added and when you click Refresh in Layer Effects. A heavy macro is best After a Pause or On Demand, so painting doesn't lag."},
-			{key = "seconds", name = "Seconds", type = .Number, lo = 0.5, hi = 600, suffix = " s", def = {num = MACRO_TRIGGER_SECONDS}, no_wire = true, only = "trigger=After a Pause|Every N Seconds", help = "After a Pause: how long the layer has to be left alone. Every N Seconds: the shortest time between two runs."})
+			{key = "seconds", name = "Seconds", type = .Number, lo = MACRO_TRIGGER_MIN_SECONDS, hi = 600, step = 0.1, curve = 3, suffix = " s", def = {num = MACRO_TRIGGER_SECONDS}, no_wire = true, only = "trigger=After a Pause|Every N Seconds", help = "After a Pause: how long the layer has to be left alone. Every N Seconds: the shortest time between two runs."})
 	} else {
 		shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = START_HELP})
 	}
@@ -709,7 +712,7 @@ macro_trigger :: proc(m: ^Macro) -> (t: Macro_Trigger, seconds: f64) {
 		case "trigger":
 			t = Macro_Trigger(clamp(int(vals[i].num), 0, len(Macro_Trigger) - 1))
 		case "seconds":
-			seconds = vals[i].num
+			seconds = max(vals[i].num, MACRO_TRIGGER_MIN_SECONDS)
 		}
 	}
 	return
