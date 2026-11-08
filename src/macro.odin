@@ -64,7 +64,27 @@ Macro_Setting :: struct {
 	browse:  bool, // Text: a file path, with a button that picks it in a save window
 	only:    string, // "key=choice|choice": shown only while that Choice setting is one of those
 	suggest: string, // Text: a list the app offers to pick from (macro_suggest), such as "layers"; typing still works
+	no_wire: bool, // set on the node only: it has no socket, and a wire into it is ignored
 }
+
+// When a macro runs: the Trigger setting of its Start node. On Hotkey macros are run by the user. The others are live
+// layer effects (in an app that has them, macro_layer_effects): they run on a layer they're added to, as often as the
+// trigger allows. Which one a macro has decides where it's offered: tool groups and the Macros menu list the On Hotkey
+// ones, a layer's effects list the rest.
+Macro_Trigger :: enum u8 {
+	Hotkey, // run by the user: a tool group's key, the Macros menu or the Macros window
+	Paint, // after each change to the layer
+	Pause, // once the layer has been left alone for `seconds`
+	Timer, // at most once every `seconds`, while the layer keeps changing
+	Demand, // when added, and when asked to (Refresh)
+}
+
+MACRO_TRIGGER_NAMES := [?]string{"On Hotkey", "On Paint", "After a Pause", "Every N Seconds", "On Demand"}
+MACRO_TRIGGER_SECONDS :: 2 // Seconds' default
+
+// The app runs macros as live layer effects (Paints), so the Start node offers their triggers. Set it before the
+// macros are first used: macro_shared_defs reads it once.
+macro_layer_effects := false
 
 Macro_Kind :: enum u8 {
 	Action, // Document in and out: changes the document
@@ -361,7 +381,14 @@ shared_def :: proc(def: Macro_Def, settings: ..Macro_Setting) {
 macro_shared_defs :: proc() -> []Macro_Def {
 	if len(shared_defs) > 0 do return shared_defs[:]
 	ANY_NUMBER :: "Any number. Type it, or wire a value into it."
-	shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = "Where the macro begins: its Document wire leads through the steps, in order. Each macro has one."})
+	START_HELP :: "Where the macro begins: its Document wire leads through the steps, in order. Each macro has one."
+	if macro_layer_effects {
+		shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = START_HELP + " Its Trigger sets when the macro runs."},
+			{key = "trigger", name = "Trigger", type = .Choice, choices = MACRO_TRIGGER_NAMES[:], no_wire = true, help = "When the macro runs. On Hotkey: when you run it, from a tool group's key, the Macros menu or the Macros window. The others make it a live layer effect, which runs on the layers it's added to: On Paint after every change to the layer, After a Pause once you've left the layer alone for Seconds, Every N Seconds at most once every Seconds while the layer keeps changing, On Demand only when it's added and when you click Refresh in Layer Effects. A heavy macro is best After a Pause or On Demand, so painting doesn't lag."},
+			{key = "seconds", name = "Seconds", type = .Number, lo = 0.5, hi = 600, suffix = " s", def = {num = MACRO_TRIGGER_SECONDS}, no_wire = true, only = "trigger=After a Pause|Every N Seconds", help = "After a Pause: how long the layer has to be left alone. Every N Seconds: the shortest time between two runs."})
+	} else {
+		shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = START_HELP})
+	}
 	shared_def({id = "value.Number", name = "Number", category = "Values", kind = .Value, out = .Number, help = "A number, for the settings of other nodes."},
 		{key = "value", name = "Value", type = .Number, help = ANY_NUMBER})
 	shared_def({id = "value.Bool", name = "On / Off", category = "Values", kind = .Value, out = .Bool, help = "On or off, for the settings of other nodes."},
@@ -568,7 +595,7 @@ macro_node_values :: proc(r: ^Macro_Run, n: ^Macro_Node, def: ^Macro_Def) -> (va
 	vals = make([]Macro_Value, len(def.settings), context.temp_allocator)
 	for &s, i in def.settings {
 		vals[i] = s.def
-		if from := macro_wire_from(r.m, n.id, s.key); from != 0 {
+		if from := macro_wire_from(r.m, n.id, s.key); from != 0 && !s.no_wire {
 			v, vok, vmsg := macro_eval(r, from)
 			if !vok do return nil, false, vmsg
 			vals[i] = macro_fit(&s, v)
@@ -661,7 +688,53 @@ macro_run_named :: proc(name: string) -> bool {
 		set_statusf("There is no macro called %s", name)
 		return false
 	}
+	if t, _ := macro_trigger(m); t != .Hotkey {
+		set_statusf("%s is a layer effect (%s): add it to a layer, or set its Start node's Trigger to On Hotkey", m.name, macro_trigger_text(m))
+		return false
+	}
 	return macro_run_report(m)
+}
+
+// When macro `m` runs (its Start node's Trigger), and the Seconds the timed triggers wait. On Hotkey in an app without
+// layer effects, and for a macro saved before triggers existed.
+macro_trigger :: proc(m: ^Macro) -> (t: Macro_Trigger, seconds: f64) {
+	seconds = MACRO_TRIGGER_SECONDS
+	if m == nil || !macro_layer_effects do return
+	id := macro_start(m)
+	if id <= 0 do return
+	def := macro_def_find(MACRO_START)
+	vals := macro_node_own_values(macro_node(m, id), def)
+	for &s, i in def.settings {
+		switch s.key {
+		case "trigger":
+			t = Macro_Trigger(clamp(int(vals[i].num), 0, len(Macro_Trigger) - 1))
+		case "seconds":
+			seconds = vals[i].num
+		}
+	}
+	return
+}
+
+// The trigger as words, with its Seconds: "On Paint", "After a 2 s pause", "Every 5 s" (temp memory).
+macro_trigger_text :: proc(m: ^Macro) -> string {
+	return macro_trigger_words(macro_trigger(m))
+}
+
+// A trigger and its Seconds as words (temp memory).
+macro_trigger_words :: proc(t: Macro_Trigger, s: f64) -> string {
+	#partial switch t {
+	case .Pause:
+		return fmt.tprintf("After a %s s pause", macro_num_text(s))
+	case .Timer:
+		return fmt.tprintf("Every %s s", macro_num_text(s))
+	}
+	return MACRO_TRIGGER_NAMES[t]
+}
+
+// Is `m` a live layer effect rather than run by the user?
+macro_is_layer_effect :: proc(m: ^Macro) -> bool {
+	t, _ := macro_trigger(m)
+	return t != .Hotkey
 }
 
 // Runs a macro and reports the result in the status bar.

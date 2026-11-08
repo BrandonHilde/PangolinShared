@@ -293,7 +293,7 @@ node_ports :: proc(n: ^Macro_Node, def: ^Macro_Def) -> []Me_Port {
 	case .Value:
 		append(&out, Me_Port{n.id, true, "out"})
 	}
-	for si in shown_rows(n, def) do append(&out, Me_Port{n.id, false, def.settings[si].key})
+	for si in shown_rows(n, def) do if !def.settings[si].no_wire do append(&out, Me_Port{n.id, false, def.settings[si].key})
 	return out[:]
 }
 
@@ -666,7 +666,7 @@ def_fits_wire :: proc(def: ^Macro_Def) -> bool {
 		return me.wire.out ? def.kind == .Action : def.kind != .Value
 	}
 	if me.wire.out {
-		for s in def.settings do if macro_can_feed(wt, s.type) do return true
+		for s in def.settings do if !s.no_wire && macro_can_feed(wt, s.type) do return true
 		return false
 	}
 	return def.kind == .Value && macro_can_feed(def.out, wt)

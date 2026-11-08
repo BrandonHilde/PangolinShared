@@ -265,6 +265,22 @@ list. That way a command added later can't be silently left out.
   - `macro_lib_gen` tells effects that a macro changed.
 - **Done, part of step 5: value nodes and value wires.** `wire a b.key` lines in the file. If, Repeat and For each are
   still to come.
+- **Done: triggers** (2026-11-08). The Start node has a Trigger (`macro_trigger` in `src/macro.odin`), so a heavy
+  macro doesn't run after every brush stroke.
+  - **On Hotkey** (the default, and what older files load as): run by the user, from a tool group's key, the Macros
+    menu or the Macros window.
+  - **Layer effect triggers:** On Paint (after every change to the layer), After a Pause (once the layer has been left
+    alone for Seconds), Every N Seconds (at most that often while it keeps changing), and On Demand (when added, and
+    on Refresh in Layer Effects).
+  - **Each list offers only the macros that fit it.** Groups, the Macros menu and the Macros window's Run take On
+    Hotkey macros, and the blend list and Layer Effects take the rest. A macro in the wrong place says why instead of
+    running. The editor's Run still runs any macro.
+  - **A layer's effects run together**, so they follow the most careful trigger among them.
+  - **Some changes apply at once whatever the trigger:** switching, adding or reordering effects, or changing the
+    layer's blend mode or opacity. Exports don't wait for a timer, but On Demand still waits for Refresh.
+  - **Only Paints offers the triggers** (`macro_layer_effects`). In the other apps, Start has no Trigger and every
+    macro is On Hotkey.
+  - The Trigger and Seconds settings are `no_wire`: they have no socket.
 - **Not done yet.**
   - Choosing a tool by clicking it in a group isn't recorded (only `run_cmd` and dialog OKs are).
   - The editor has no undo of its own, and no copy and paste between macros.
