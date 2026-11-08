@@ -103,6 +103,7 @@ panel_timeline :: proc() {
 files_prefs_write :: proc(sb: ^strings.Builder) {
 	fmt.sbprintf(sb, "bottom_panel=%d\n", int(bottom_mode))
 	fmt.sbprintf(sb, "files_dir=%s\n", files_dir)
+	recent_prefs_write(sb)
 }
 
 // Takes the keys the file browser saves; false if `key` is not one of them.
@@ -114,7 +115,7 @@ files_prefs_read :: proc(key, val: string) -> bool {
 		delete(files_dir)
 		files_dir = strings.clone(val)
 	case:
-		return false
+		return recent_prefs_read(key, val)
 	}
 	return true
 }
