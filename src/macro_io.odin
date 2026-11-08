@@ -29,6 +29,7 @@ MACRO_VERSION :: 1
 MACRO_MAX :: 200 // macros loaded from the folder
 
 macro_lib: [dynamic]^Macro // the app's macros, sorted by name
+macro_lib_gen: int // goes up whenever a macro in the library changes, comes or goes
 
 macro_to_text :: proc(m: ^Macro) -> string {
 	sb := strings.builder_make(context.temp_allocator)
@@ -201,6 +202,7 @@ macro_lib_sort :: proc() {
 }
 
 macros_clear :: proc() {
+	macro_lib_gen += 1
 	for m in macro_lib do macro_free(m)
 	clear(&macro_lib)
 }
@@ -229,6 +231,7 @@ macros_refresh :: proc() {
 }
 
 macro_save :: proc(m: ^Macro) -> bool {
+	macro_lib_gen += 1
 	os.make_directory_all(macro_dir())
 	return write_file(macro_path(m.name), transmute([]u8)macro_to_text(m))
 }
@@ -243,6 +246,7 @@ macro_add :: proc(m: ^Macro) -> bool {
 }
 
 macro_delete :: proc(m: ^Macro) {
+	macro_lib_gen += 1
 	os.remove(macro_path(m.name))
 	for x, i in macro_lib {
 		if x == m {
