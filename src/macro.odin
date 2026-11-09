@@ -43,12 +43,13 @@ Macro_Type :: enum u8 {
 	Color,
 	Choice,
 	Text,
+	Curve, // points x,y (0..255) joined by a smooth line: a new tone for each tone, or how strongly something applies
 }
 
 Macro_Value :: struct {
 	num:  f64, // Number; Bool as 0 or 1; Choice as the index into the setting's choices
 	col:  Color,
-	text: string,
+	text: string, // Text; Curve as its points, "0,0 128,160 255,255"
 }
 
 Macro_Setting :: struct {
@@ -67,6 +68,7 @@ Macro_Setting :: struct {
 	only:    string, // "key=choice|choice": shown only while that Choice setting is one of those
 	suggest: string, // Text: a list the app offers to pick from (macro_suggest), such as "layers"; typing still works
 	no_wire: bool, // set on the node only: it has no socket, and a wire into it is ignored
+	mask:    bool, // Curve: it gives how strongly something applies at each tone (bottom: none, top: full), not a new tone
 }
 
 // When a macro runs: the Trigger setting of its Start node. On Hotkey macros are run by the user. The others are live
@@ -78,7 +80,7 @@ Macro_Trigger :: enum u8 {
 	Paint, // after each change to the layer
 	Pause, // once the layer has been left alone for `seconds`
 	Timer, // at most once every `seconds`, while the layer keeps changing
-	Demand, // when added, and when asked to (Refresh)
+	Demand, // when added, once painting on the layer stops, and when asked to (Refresh)
 }
 
 MACRO_TRIGGER_NAMES := [?]string{"On Hotkey", "On Paint", "After a Pause", "Every N Seconds", "On Demand"}
@@ -138,6 +140,10 @@ Macro :: struct {
 }
 
 macro_running: bool // a macro is running: its commands are not recorded
+
+// The node editor saved a change to layer effect `name` as it was being edited: an app with layer effects runs them
+// again at once, so the canvas follows the edit (nil: nothing to do).
+macro_on_live_edit: proc(name: string)
 
 // ---------------------------------------------------------------------------
 // Graph
@@ -387,7 +393,7 @@ macro_shared_defs :: proc() -> []Macro_Def {
 	START_HELP :: "Where the macro begins: its Document wire leads through the steps, in order. Each macro has one."
 	if macro_layer_effects {
 		shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = START_HELP + " Its Trigger sets when the macro runs."},
-			{key = "trigger", name = "Trigger", type = .Choice, choices = MACRO_TRIGGER_NAMES[:], no_wire = true, help = "When the macro runs. On Hotkey: when you run it, from a tool group's key, the Macros menu or the Macros window. The others make it a live layer effect, which runs on the layers it's added to: On Paint after every change to the layer, After a Pause once you've left the layer alone for Seconds, Every N Seconds at most once every Seconds while the layer keeps changing, On Demand only when it's added and when you click Refresh in Layer Effects. A heavy macro is best After a Pause or On Demand, so painting doesn't lag."},
+			{key = "trigger", name = "Trigger", type = .Choice, choices = MACRO_TRIGGER_NAMES[:], no_wire = true, help = "When the macro runs. On Hotkey: when you run it, from a tool group's key, the Macros menu or the Macros window. The others make it a live layer effect, which runs on the layers it's added to: On Paint after every change to the layer, After a Pause once you've left the layer alone for Seconds, Every N Seconds at most once every Seconds while the layer keeps changing, On Demand when it's added, once when you stop painting on the layer (a moment after the pen lifts, if no new stroke starts), and when you click the circling arrow by the layer's fx (or Refresh in Layer Effects). A heavy macro is best After a Pause or On Demand, so painting doesn't lag."},
 			{key = "seconds", name = "Seconds", type = .Number, lo = MACRO_TRIGGER_MIN_SECONDS, hi = 600, step = 0.1, curve = 3, suffix = " s", def = {num = MACRO_TRIGGER_SECONDS}, no_wire = true, only = "trigger=After a Pause|Every N Seconds", help = "After a Pause: how long the layer has to be left alone. Every N Seconds: the shortest time between two runs."})
 	} else {
 		shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = START_HELP})
@@ -400,6 +406,8 @@ macro_shared_defs :: proc() -> []Macro_Def {
 		{key = "color", name = "Color", type = .Color, def = {col = {0, 0, 0, 255}}, help = "The color, as #rrggbb or #rrggbbaa."})
 	shared_def({id = "value.Text", name = "Text", category = "Values", kind = .Value, out = .Text, help = "Text, such as a file name or a layer name, for the settings of other nodes."},
 		{key = "text", name = "Text", type = .Text, help = "The text."})
+	shared_def({id = "value.Curve", name = "Curve", category = "Values", kind = .Value, out = .Curve, help = "A curve, for the curve settings of other nodes: wire one into several nodes and they all follow it."},
+		{key = "curve", name = "Curve", type = .Curve, def = {text = MACRO_CURVE_DEFAULT}, help = MACRO_CURVE_HELP})
 	shared_def({id = "value.Math", name = "Math", category = "Values", kind = .Value, out = .Number, help = "Works out a number from two others."},
 		{key = "a", name = "A", type = .Number, help = ANY_NUMBER},
 		{key = "op", name = "Operation", type = .Choice, choices = MATH_OPS[:], help = "What to do with A and B. Round rounds A to the nearest multiple of B, or to a whole number if B is 0."},
@@ -475,7 +483,7 @@ macro_eval :: proc(r: ^Macro_Run, id: int) -> (v: Macro_Value, ok: bool, msg: st
 	r.busy[id] = false
 	if !aok do return {}, false, amsg
 	switch def.id {
-	case "value.Number", "value.Bool", "value.Color", "value.Text":
+	case "value.Number", "value.Bool", "value.Color", "value.Text", "value.Curve":
 		v = args[0]
 	case "value.Math":
 		a, b := args[0].num, args[2].num
@@ -554,6 +562,10 @@ macro_value_parse :: proc(s: ^Macro_Setting, text: string) -> (v: Macro_Value, o
 		v.num = f64(i)
 	case .Text:
 		v.text = text
+	case .Curve:
+		pts, pok := macro_curve_parse(t)
+		if !pok do return
+		v.text = macro_curve_text(pts)
 	}
 	return v, true
 }
@@ -571,7 +583,7 @@ macro_value_text :: proc(s: ^Macro_Setting, v: Macro_Value) -> string {
 	case .Choice:
 		i := int(v.num)
 		return i >= 0 && i < len(s.choices) ? s.choices[i] : "0"
-	case .Text:
+	case .Text, .Curve:
 		return v.text
 	}
 	return ""
@@ -590,6 +602,108 @@ macro_parse_color :: proc(t: string) -> (c: Color, ok: bool) {
 	n := strconv.parse_u64_of_base(h, 16) or_return
 	if len(h) == 6 do n = n << 8 | 0xff
 	return Color{u8(n >> 24), u8(n >> 16), u8(n >> 8), u8(n)}, true
+}
+
+// ---------------------------------------------------------------------------
+// Curves: points from 0,0 (bottom left) to 255,255 (top right), joined by a smooth line that never overshoots
+// ---------------------------------------------------------------------------
+
+MACRO_CURVE_DEFAULT :: "0,0 64,64 192,192 255,255"
+MACRO_CURVE_HELP :: "Tones go in along the bottom (dark at the left) and come out up the side. Drag a point to bend the curve, click the line to add a point, right-click a point to remove it."
+MACRO_CURVE_MAX :: 16 // points
+
+// A curve's points from their text, "x,y x,y ...", sorted left to right (temp memory). Needs two points or more.
+macro_curve_parse :: proc(t: string) -> (pts: []Vec2, ok: bool) {
+	out := make([dynamic]Vec2, context.temp_allocator)
+	for f in strings.fields(t, context.temp_allocator) {
+		xs, _, ys := strings.partition(f, ",")
+		x := strconv.parse_f64(xs) or_return
+		y := strconv.parse_f64(ys) or_return
+		if math.is_nan(x) || math.is_nan(y) do return
+		p := Vec2{f32(clamp(math.round(x), 0, 255)), f32(clamp(math.round(y), 0, 255))}
+		// in order of x; a point on the same x as another replaces it
+		at := len(out)
+		for q, i in out {
+			if q.x == p.x {
+				at = -1
+				out[i] = p
+				break
+			}
+			if q.x > p.x {
+				at = i
+				break
+			}
+		}
+		if at >= 0 do inject_at(&out, at, p)
+		if len(out) > MACRO_CURVE_MAX do return
+	}
+	if len(out) < 2 do return
+	return out[:], true
+}
+
+// A curve's points as text (temp memory).
+macro_curve_text :: proc(pts: []Vec2) -> string {
+	sb := strings.builder_make(context.temp_allocator)
+	for p, i in pts {
+		if i > 0 do strings.write_byte(&sb, ' ')
+		fmt.sbprintf(&sb, "%d,%d", int(math.round(p.x)), int(math.round(p.y)))
+	}
+	return strings.to_string(sb)
+}
+
+// The curve's height (0..255) over each tone 0..255: monotone cubic (Fritsch-Carlson) between the points, so it never
+// bulges past them, and flat beyond the first and last. What the editor draws is what the nodes apply.
+macro_curve_lut :: proc(pts: []Vec2) -> (lut: [256]f32) {
+	n := len(pts)
+	if n == 0 {
+		for i in 0 ..< 256 do lut[i] = f32(i)
+		return
+	}
+	if n == 1 {
+		for i in 0 ..< 256 do lut[i] = clamp(pts[0].y, 0, 255)
+		return
+	}
+	d := make([]f32, n, context.temp_allocator)
+	m := make([]f32, n, context.temp_allocator)
+	for k in 0 ..< n - 1 do d[k] = (pts[k + 1].y - pts[k].y) / max(pts[k + 1].x - pts[k].x, 1e-3)
+	m[0], m[n - 1] = d[0], d[n - 2]
+	for k in 1 ..< n - 1 do m[k] = d[k - 1] * d[k] <= 0 ? 0 : (d[k - 1] + d[k]) * 0.5
+	for k in 0 ..< n - 1 {
+		if d[k] == 0 {
+			m[k], m[k + 1] = 0, 0
+			continue
+		}
+		a, b := m[k] / d[k], m[k + 1] / d[k]
+		if s := a * a + b * b; s > 9 {
+			t := 3 / math.sqrt(s)
+			m[k], m[k + 1] = t * a * d[k], t * b * d[k]
+		}
+	}
+	seg := 0
+	for i in 0 ..< 256 {
+		x := f32(i)
+		switch {
+		case x <= pts[0].x:
+			lut[i] = pts[0].y
+		case x >= pts[n - 1].x:
+			lut[i] = pts[n - 1].y
+		case:
+			for seg < n - 2 && x > pts[seg + 1].x do seg += 1
+			h := pts[seg + 1].x - pts[seg].x
+			t := (x - pts[seg].x) / h
+			t2, t3 := t * t, t * t * t
+			lut[i] = (2 * t3 - 3 * t2 + 1) * pts[seg].y + (t3 - 2 * t2 + t) * h * m[seg] + (-2 * t3 + 3 * t2) * pts[seg + 1].y + (t3 - t2) * h * m[seg + 1]
+		}
+		lut[i] = clamp(lut[i], 0, 255)
+	}
+	return
+}
+
+// The curve of a Curve value as a table (identity if the text isn't a curve).
+macro_curve_value_lut :: proc(v: Macro_Value) -> [256]f32 {
+	pts, ok := macro_curve_parse(v.text)
+	if !ok do return macro_curve_lut(nil)
+	return macro_curve_lut(pts)
 }
 
 // The node's settings as values, in the order of `def.settings` (temp memory): from the wire feeding the setting, else

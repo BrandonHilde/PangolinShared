@@ -31,6 +31,7 @@ ME_BAR_H :: 26
 ME_SEARCH_W :: 300
 ME_SEARCH_ROWS :: 14
 ME_LABEL_W :: 0 // widgets show their own label
+ME_CURVE_ROWS :: 7 // rows a curve takes on its node
 
 Me_Drag :: enum {
 	None,
@@ -71,6 +72,7 @@ Macro_Editor :: struct {
 	lib_filter:   Name,
 	lib_scroll:   i32,
 	side_scroll:  i32,
+	side_h:       i32, // how tall the selected node's settings are, for scrolling
 	msg:          Name,
 	msg_bad:      bool,
 	err_node:     int,
@@ -78,6 +80,8 @@ Macro_Editor :: struct {
 	edit_node:    int,
 	edit_key:     string,
 	fit:          bool, // frame the whole graph once the canvas size is known
+	curve_id:     u32, // the curve whose point is being dragged
+	curve_pt:     int,
 }
 
 me: Macro_Editor
@@ -231,10 +235,29 @@ shown_rows :: proc(n: ^Macro_Node, def: ^Macro_Def) -> []int {
 	return out[:]
 }
 
+// A setting's place on its node: `top` rows down from the header, `units` rows tall (a curve takes several).
+Me_Row :: struct {
+	si, top, units: int,
+}
+
+// Where each shown setting sits on the node (temp memory).
+@(private = "file")
+node_rows :: proc(n: ^Macro_Node, def: ^Macro_Def) -> []Me_Row {
+	out := make([dynamic]Me_Row, context.temp_allocator)
+	top := 0
+	for si in shown_rows(n, def) {
+		units := def.settings[si].type == .Curve ? ME_CURVE_ROWS : 1
+		append(&out, Me_Row{si, top, units})
+		top += units
+	}
+	return out[:]
+}
+
 @(private = "file")
 node_h :: proc(n: ^Macro_Node, def: ^Macro_Def) -> f32 {
-	rows := len(shown_rows(n, def))
-	return ME_HEAD_H + f32(rows) * ME_ROW_H + (rows > 0 ? 6 : 0)
+	rows := node_rows(n, def)
+	units := len(rows) > 0 ? rows[len(rows) - 1].top + rows[len(rows) - 1].units : 0
+	return ME_HEAD_H + f32(units) * ME_ROW_H + (units > 0 ? 6 : 0)
 }
 
 // The node's box on screen.
@@ -251,17 +274,17 @@ port_pos :: proc(n: ^Macro_Node, def: ^Macro_Def, p: Me_Port) -> Vec2 {
 	head := b.y + ME_HEAD_H * me.zoom / 2
 	if p.out do return {b.x + b.w, head}
 	if p.key == "" do return {b.x, head}
-	for si, row in shown_rows(n, def) {
-		if def.settings[si].key == p.key do return {b.x, b.y + (ME_HEAD_H + f32(row) * ME_ROW_H + ME_ROW_H / 2) * me.zoom}
+	for row in node_rows(n, def) {
+		if def.settings[row.si].key == p.key do return {b.x, b.y + (ME_HEAD_H + f32(row.top) * ME_ROW_H + ME_ROW_H / 2) * me.zoom}
 	}
 	return {b.x, head}
 }
 
-// A setting's row on screen (the widget's area at 100%).
+// A setting's area on screen (the widget's area at 100%).
 @(private = "file")
-row_rect :: proc(b: FRect, i: int) -> Rect {
-	y := b.y + (ME_HEAD_H + f32(i) * ME_ROW_H + 2) * me.zoom
-	return {i32(math.round(b.x + 10 * me.zoom)), i32(math.round(y)), i32(math.round((ME_NODE_W - 18) * me.zoom)), i32(math.round((ME_ROW_H - 4) * me.zoom))}
+row_rect :: proc(b: FRect, row: Me_Row) -> Rect {
+	y := b.y + (ME_HEAD_H + f32(row.top) * ME_ROW_H + 2) * me.zoom
+	return {i32(math.round(b.x + 10 * me.zoom)), i32(math.round(y)), i32(math.round((ME_NODE_W - 18) * me.zoom)), i32(math.round((f32(row.units) * ME_ROW_H - 4) * me.zoom))}
 }
 
 // What a socket carries: the Document (`doc`), or a value of type `t`.
@@ -354,6 +377,7 @@ is_selected :: proc(id: int) -> bool {
 
 @(private = "file")
 select_only :: proc(id: int) {
+	if len(me.sel) != 1 || me.sel[0] != id do me.side_scroll = 0
 	clear(&me.sel)
 	if id != 0 do append(&me.sel, id)
 }
@@ -376,6 +400,7 @@ TYPE_COLORS := [Macro_Type]Color {
 	.Color  = {235, 195, 95, 255},
 	.Choice = {120, 165, 235, 255},
 	.Text   = {195, 145, 235, 255},
+	.Curve  = {95, 205, 200, 255},
 }
 DOC_COLOR :: Color{225, 228, 235, 255}
 
@@ -398,6 +423,8 @@ category_color :: proc(cat: string) -> Color {
 		return {110, 90, 60, 255}
 	case "Adjust", "Filter":
 		return {100, 65, 105, 255}
+	case "Develop":
+		return {125, 85, 45, 255}
 	case "Layer":
 		return {60, 95, 115, 255}
 	case "File":
@@ -431,6 +458,20 @@ macro_editor_ui :: proc(r: Rect) {
 	me_library(lib)
 	me_side(side)
 	me_bar(bar)
+	me_live_sync()
+}
+
+// A layer effect shows its edits on the canvas as they happen: once the mouse is up and no field is being typed in,
+// a change is saved to the library, and the layers using it run it again (macro_on_live_edit), whatever its trigger.
+@(private = "file")
+me_live_sync :: proc() {
+	if !me.dirty || me.m == nil || ui.down[0] || ui.down[1] || ui.focus_id != 0 || me.drag != .None || me.curve_id != 0 do return
+	lib := strings.clone(name_str(&me.lib_name), context.temp_allocator)
+	if lib == "" || !strings.equal_fold(name_str(&me.name), lib) || macro_find(lib) == nil do return
+	if !macro_is_layer_effect(me.m) do return
+	if !me_save() do return
+	if macro_on_live_edit != nil do macro_on_live_edit(lib)
+	me_set_msg(false, "Saved %s: the layers using it show the change", lib)
 }
 
 @(private = "file")
@@ -768,8 +809,8 @@ on_widget :: proc(p: Vec2) -> bool {
 	def := macro_def_find(n.kind)
 	if def == nil do return false
 	b := node_box(n, def)
-	for si, row in shown_rows(n, def) {
-		if macro_wire_from(me.m, n.id, def.settings[si].key) != 0 do continue
+	for row in node_rows(n, def) {
+		if macro_wire_from(me.m, n.id, def.settings[row.si].key) != 0 do continue
 		rr := row_rect(b, row)
 		if in_rect(rr, i32(p.x), i32(p.y)) do return true
 	}
@@ -928,7 +969,7 @@ me_node :: proc(n: ^Macro_Node) {
 		draw_text(b.x + b.w - 14 * z - text_width(ts, fs), b.y + (ME_HEAD_H * z - text_cap(fs)) / 2, ts, with_alpha(WHITE, 150), fs)
 	}
 	if def != nil {
-		for si, row in shown_rows(n, def) do me_row(n, def, &def.settings[si], si, row, b, fs)
+		for row in node_rows(n, def) do me_row(n, def, &def.settings[row.si], row.si, row, b, fs)
 	}
 	clip_end()
 	if def != nil {
@@ -961,9 +1002,22 @@ me_node :: proc(n: ^Macro_Node) {
 
 // One setting of a node: its widget at 100%, else its value as text; a wired setting shows where it comes from.
 @(private = "file")
-me_row :: proc(n: ^Macro_Node, def: ^Macro_Def, s: ^Macro_Setting, i, row: int, b: FRect, fs: i32) {
+me_row :: proc(n: ^Macro_Node, def: ^Macro_Def, s: ^Macro_Setting, i: int, row: Me_Row, b: FRect, fs: i32) {
 	rr := row_rect(b, row)
 	from := macro_wire_from(me.m, n.id, s.key)
+	if s.type == .Curve && (from != 0 || me.zoom != 1) {
+		// a curve still shows as a curve: the one wired in, or its own, zoomed out
+		v := macro_node_own_values(n, def)[i]
+		label := s.name
+		if from != 0 {
+			src := macro_node(me.m, from)
+			sdef := src != nil ? macro_def_find(src.kind) : nil
+			label = fmt.tprintf("%s  <  %s", s.name, sdef != nil ? sdef.name : "?")
+			if sdef != nil && sdef.kind == .Value && sdef.out == .Curve && len(sdef.settings) > 0 do v = macro_node_own_values(src, sdef)[0]
+		}
+		curve_widget(n, s, rr, v, false, label, fs)
+		return
+	}
 	if from != 0 || me.zoom != 1 {
 		txt: string
 		if from != 0 {
@@ -989,6 +1043,9 @@ setting_text :: proc(s: ^Macro_Setting, v: Macro_Value) -> string {
 		return fmt.tprintf("%s%s", t, s.suffix)
 	case .Bool:
 		return v.num != 0 ? "on" : "off"
+	case .Curve:
+		pts, _ := macro_curve_parse(v.text)
+		return fmt.tprintf("%d points", len(pts))
 	}
 	return macro_value_text(s, v)
 }
@@ -1081,7 +1138,135 @@ setting_widget :: proc(n: ^Macro_Node, s: ^Macro_Setting, i: int, r: Rect, v: Ma
 				delete(p)
 			}
 		}
+	case .Curve:
+		if t, changed := curve_widget(n, s, r, v, true, s.name, FONT_SIZE); changed do set(n, s, {text = t})
 	}
+}
+
+// A Curve setting: its name, then a graph to shape it in `r`. Tones go in along the bottom (the bar under the graph,
+// dark at the left) and come out up the side (the bar at its left). A `mask` curve gives a strength instead: at the top
+// the node works fully on that tone, at the bottom not at all, and the area under the line is filled to show it.
+// With `live`, drag a point to move it, click to add one, right-click one to remove it; without, it is only drawn
+// (a zoomed-out node, a wired curve). Returns the new points as text when they change.
+@(private = "file")
+curve_widget :: proc(n: ^Macro_Node, s: ^Macro_Setting, r: Rect, v: Macro_Value, live: bool, label: string, fs: i32) -> (out: string, changed: bool) {
+	pts_in, pok := macro_curve_parse(v.text)
+	if !pok do pts_in, _ = macro_curve_parse(s.def.text != "" ? s.def.text : MACRO_CURVE_DEFAULT)
+	pts := make([dynamic]Vec2, context.temp_allocator)
+	append(&pts, ..pts_in)
+	z := live ? 1 : me.zoom
+	head := i32(math.round(16 * z))
+	bar := max(i32(math.round(5 * z)), 2)
+	gap := max(i32(math.round(2 * z)), 1)
+	if fs >= 7 {
+		if live {
+			text(r.x, r.y + 2, label, C_TEXT_DIM)
+		} else {
+			draw_text(f32(r.x), f32(r.y) + (f32(head) - text_cap(fs)) / 2, label, TYPE_COLORS[.Curve], fs)
+		}
+	}
+	plot := Rect{r.x + bar + gap, r.y + head, r.w - bar - gap, r.h - head - bar - gap}
+	if plot.w < 8 || plot.h < 8 do return
+	col := TYPE_COLORS[.Curve]
+	if live && button(Rect{r.x + r.w - 44, r.y, 44, 14}, "Reset", {"", s.mask ? "Put the curve back as it was when the node was added." : "Make the curve as it was when the node was added: tones come out as they go in."}) {
+		return s.def.text != "" ? s.def.text : MACRO_CURVE_DEFAULT, true
+	}
+	// the bars: what goes in (bottom) and what comes out, or how strongly it applies (left)
+	for x in 0 ..< plot.w {
+		g := u8(x * 255 / max(plot.w - 1, 1))
+		draw_rect(f32(plot.x + x), f32(plot.y + plot.h + gap), 1, f32(bar), {g, g, g, 255})
+	}
+	for y in 0 ..< plot.h {
+		g := u8((plot.h - 1 - y) * 255 / max(plot.h - 1, 1))
+		draw_rect(f32(r.x), f32(plot.y + y), f32(bar), 1, {g, g, g, 255})
+	}
+	ctl_well(plot)
+	px, py, pw, ph := f32(plot.x) + 1, f32(plot.y) + 1, f32(plot.w) - 2, f32(plot.h) - 2
+	to_scr :: proc(p: Vec2, px, py, pw, ph: f32) -> Vec2 {
+		return {px + p.x / 255 * pw, py + ph - p.y / 255 * ph}
+	}
+	for k in 1 ..< 4 {
+		draw_rect(px + pw * f32(k) / 4, py, 1, ph, with_alpha(C_TEXT, 16))
+		draw_rect(px, py + ph * f32(k) / 4, pw, 1, with_alpha(C_TEXT, 16))
+	}
+	if !s.mask do draw_line({px, py + ph}, {px + pw, py}, with_alpha(C_TEXT, 50))
+
+	// input: grab, add, remove, drag
+	id := make_id(r, fmt.tprintf("curve%d.%s", n.id, s.key))
+	hit := Rect{plot.x - 5, plot.y - 5, plot.w + 10, plot.h + 10}
+	mouse := Vec2{f32(ui.mx), f32(ui.my)}
+	at := Vec2{clamp((mouse.x - px) / pw * 255, 0, 255), clamp((py + ph - mouse.y) / ph * 255, 0, 255)}
+	near := -1
+	if live && ui_hover(hit) && !popup.open {
+		best := f32(7)
+		for p, i in pts {
+			q := to_scr(p, px, py, pw, ph)
+			dv := q - mouse
+			if dd := math.sqrt(dv.x * dv.x + dv.y * dv.y); dd < best do near, best = i, dd
+		}
+		tip_area(plot, fmt.tprintf("curvetip%d.%s", n.id, s.key), {s.name, s.help})
+		if ui.pressed[0] {
+			if near < 0 && len(pts) < MACRO_CURVE_MAX {
+				near = len(pts)
+				for p, i in pts {
+					if p.x > at.x {
+						near = i
+						break
+					}
+				}
+				inject_at(&pts, near, Vec2{math.round(at.x), math.round(at.y)})
+				changed = true
+			}
+			if near >= 0 {
+				me.curve_id, me.curve_pt = id, near
+				ui.active_id = id
+				ui.focus_id = 0
+			}
+		} else if ui.pressed[1] && near >= 0 && len(pts) > 2 {
+			ordered_remove(&pts, near)
+			near = -1
+			changed = true
+		}
+	}
+	if live && me.curve_id == id {
+		if !ui.down[0] {
+			me.curve_id = 0
+			if ui.active_id == id do ui.active_id = 0
+		} else if k := me.curve_pt; k >= 0 && k < len(pts) {
+			lo: f32 = k > 0 ? pts[k - 1].x + 1 : 0
+			hi: f32 = k < len(pts) - 1 ? pts[k + 1].x - 1 : 255
+			np := Vec2{math.round(clamp(at.x, lo, hi)), math.round(at.y)}
+			if np != pts[k] {
+				pts[k] = np
+				changed = true
+			}
+			near = k
+		}
+	}
+
+	// the curve, filled under for a strength, and its points
+	lut := macro_curve_lut(pts[:])
+	steps := max(int(pw), 2)
+	prev: Vec2
+	for i in 0 ..= steps {
+		t := f32(i) / f32(steps) * 255
+		y := lut[clamp(int(math.round(t)), 0, 255)]
+		q := to_scr({t, y}, px, py, pw, ph)
+		if s.mask && i < steps do draw_rect(q.x, q.y, max(pw / f32(steps), 1), py + ph - q.y, with_alpha(col, 46))
+		if i > 0 do draw_thick_line(prev, q, max(1.6 * z, 1), col)
+		prev = q
+	}
+	if live || me.zoom >= 0.6 {
+		hs := max(3 * z, 2)
+		for p, i in pts {
+			q := to_scr(p, px, py, pw, ph)
+			lit := live && i == near
+			draw_frect({q.x - hs - 1, q.y - hs - 1, hs * 2 + 2, hs * 2 + 2}, lit ? C_ACCENT : BLACK)
+			draw_frect({q.x - hs, q.y - hs, hs * 2, hs * 2}, lit ? WHITE : C_TEXT)
+		}
+	}
+	if changed do return macro_curve_text(pts[:]), true
+	return
 }
 
 // A text field over a node's setting. While it has the keyboard it edits `me.edit_buf`; otherwise it shows `shown`.
@@ -1319,7 +1504,10 @@ me_side :: proc(r: Rect) {
 		text(props.x, props.y, fmt.tprintf("\"%s\" isn't in this version.", n.kind), C_DANGER)
 		return
 	}
-	y := props.y
+	// a tall node (a curve, many settings) scrolls with the wheel
+	if ui_hover(props) && ui.wheel != 0 && me.curve_id == 0 do me.side_scroll -= i32(ui.wheel * 40)
+	me.side_scroll = clamp(me.side_scroll, 0, max(me.side_h - props.h, 0))
+	y := props.y - me.side_scroll
 	text(props.x, y, def.name, WHITE)
 	text(props.x + props.w - text_w(def.category), y, def.category, C_TEXT_OFF)
 	y += 16
@@ -1329,28 +1517,42 @@ me_side :: proc(r: Rect) {
 	}
 	y += 8
 	vals := macro_node_own_values(n, def)
+	// a row scrolled partly above the panel isn't drawn: hover doesn't know about clipping, and it would take clicks
+	shows :: proc(y, h: i32, props: Rect) -> bool {return y >= props.y && y < props.y + props.h}
 	for i in shown_rows(n, def) {
 		s := &def.settings[i]
 		row := Rect{props.x, y, props.w, 16}
 		if from := macro_wire_from(me.m, n.id, s.key); from != 0 {
-			src := macro_node(me.m, from)
-			sdef := src != nil ? macro_def_find(src.kind) : nil
-			text(row.x, row.y + 4, fmt.tprintf("%s  <  %s", s.name, sdef != nil ? sdef.name : "?"), TYPE_COLORS[s.type])
-			if button(Rect{row.x + row.w - 70, row.y, 70, 16}, "Disconnect", {"", "Take the wire out of this setting, so it uses its own value again."}) {
-				macro_unwire(me.m, n.id, s.key)
-				me.dirty = true
+			if shows(y, 16, props) {
+				src := macro_node(me.m, from)
+				sdef := src != nil ? macro_def_find(src.kind) : nil
+				text(row.x, row.y + 4, fmt.tprintf("%s  <  %s", s.name, sdef != nil ? sdef.name : "?"), TYPE_COLORS[s.type])
+				if button(Rect{row.x + row.w - 70, row.y, 70, 16}, "Disconnect", {"", "Take the wire out of this setting, so it uses its own value again."}) {
+					macro_unwire(me.m, n.id, s.key)
+					me.dirty = true
+				}
 			}
-		} else {
-			setting_widget(n, s, i, row, vals[i])
+			y += 22
+			continue
 		}
+		if s.type == .Curve {
+			// a bigger graph than on the node, to place points finely
+			ch := min(props.w, 200) + 22
+			if shows(y, ch, props) do setting_widget(n, s, i, Rect{props.x, y, props.w, ch}, vals[i])
+			y += ch + 8
+			continue
+		}
+		if shows(y, 16, props) do setting_widget(n, s, i, row, vals[i])
 		y += 22
 	}
 	if n.kind != MACRO_START {
 		y += 6
-		if button(Rect{props.x, y, 80, 16}, "Delete Node", {"", "Remove this node and its wires (Delete)."}) {
+		if shows(y, 16, props) && button(Rect{props.x, y, 80, 16}, "Delete Node", {"", "Remove this node and its wires (Delete)."}) {
 			macro_remove_node(me.m, n.id)
 			clear(&me.sel)
 			me.dirty = true
 		}
+		y += 16
 	}
+	me.side_h = y + me.side_scroll - props.y
 }

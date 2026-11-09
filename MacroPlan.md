@@ -281,6 +281,31 @@ list. That way a command added later can't be silently left out.
   - **Only Paints offers the triggers** (`macro_layer_effects`). In the other apps, Start has no Trigger and every
     macro is On Hotkey.
   - The Trigger and Seconds settings are `no_wire`: they have no socket.
+- **Done: curves and the Develop nodes** (2026-11-09).
+  - A **Curve** setting type (`Macro_Type.Curve`): points `x,y` from 0 to 255, stored as text (`"0,0 128,160 255,255"`),
+    joined by a monotone cubic (`macro_curve_lut`) that the editor draws and the apps apply, so what shows is what runs.
+    Settings marked `mask` give a strength per tone rather than a new tone, and draw filled.
+  - The editor shows a curve as a graph on its node (seven rows tall), editable at 100% (drag a point, click to add,
+    right-click to remove, Reset), drawn read-only when zoomed out or wired, and larger in the side panel, which now
+    scrolls. A **Curve** value node feeds one curve to several nodes.
+  - **Live editing of layer effects:** when the macro being edited is a layer effect in the library, each change is
+    saved once the mouse is up, and the app runs the layers using it again at once (`macro_on_live_edit`).
+  - **Paints: the Develop category** (`PangolinPaints/src/develop.odin`): Exposure / Contrast, Tone Curve, HSL Color.
+    Each ends with Apply (Everywhere, Curve, Layer pixels), Strength by tone, Invert, Amount and Show mask.
+    *Layer pixels* hands the effect the picture under its layer (`fx_below_pixels`): the node adjusts that picture
+    where the layer is opaque, and what the layer shows is that result, so an empty layer with such an effect is an
+    adjustment layer you paint. Such effects are checked again whenever any layer changes (`Fx_Cache.below`), and
+    their signature includes what is under them.
+- **Done: On Demand catches up when painting ends, and a refresh arrow on the layer** (2026-11-09). On Demand effects
+  also run once when painting on their layer stops: `stroke_end` marks them (`fx_stroke_done`), and `fx_update` runs them
+  when the pen has stayed up for `FX_PAINT_SETTLE` (0.8 s) with no new stroke, so a burst of strokes costs one run at the
+  end and none in the gaps between strokes. On Demand effects that adjust the picture under the layer (Layer pixels)
+  follow painting on the layers under them the same way. Other changes still wait for Refresh.
+  While a stroke is going down, the pixels it changes are copied into the effects' last result
+  (`fx_paint_through`, from `doc_dirty`), so the paint shows as it is painted without running anything, and the rest
+  of the layer keeps its effect; layers above that adjust it (Layer pixels) let the new paint show through until they
+  run. A result patched this way is never taken for current (`Fx_Cache.patched`), and an export runs the effects first. Each layer with effects on has a circling arrow beside its fx that runs them now; it is lit while the
+  layer has changed since they last ran.
 - **Not done yet.**
   - Choosing a tool by clicking it in a group isn't recorded (only `run_cmd` and dialog OKs are).
   - The editor has no undo of its own, and no copy and paste between macros.
