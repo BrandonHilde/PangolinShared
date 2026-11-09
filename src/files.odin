@@ -77,8 +77,11 @@ bottom_mode_switch :: proc() {
 panel_timeline :: proc() {
 	shown := bottom_mode_shown()
 	if shown == .Files do files_update()
-	oui.element(uictx, "timeline", "timeline", {id = "timeline", class = shown == .Hidden ? "collapsed" : ""})
+	// hidden, only the bar stays: the theme's height, and no edge to drag
+	n := oui.element(uictx, "timeline", "timeline", {id = "timeline", class = shown == .Hidden ? "collapsed" : "", style = shown == .Hidden ? "" : panel_style(.Bottom)})
 	defer oui.end(uictx)
+	panel_track_center(n)
+	if shown != .Hidden do panel_track(.Bottom, n)
 	oui.element(uictx, "bar", "row", {id = "timeline-bar"})
 	oui.element(uictx, "tools", "row", {id = "bar-tools"}) // clipped first when the window is narrow
 	switch shown {
@@ -104,9 +107,10 @@ files_prefs_write :: proc(sb: ^strings.Builder) {
 	fmt.sbprintf(sb, "bottom_panel=%d\n", int(bottom_mode))
 	fmt.sbprintf(sb, "files_dir=%s\n", files_dir)
 	recent_prefs_write(sb)
+	panel_sizes_prefs_write(sb)
 }
 
-// Takes the keys the file browser saves; false if `key` is not one of them.
+// Takes the keys the file browser (and the panel sizes) save; false if `key` is not one of them.
 files_prefs_read :: proc(key, val: string) -> bool {
 	switch key {
 	case "bottom_panel":
@@ -115,7 +119,7 @@ files_prefs_read :: proc(key, val: string) -> bool {
 		delete(files_dir)
 		files_dir = strings.clone(val)
 	case:
-		return recent_prefs_read(key, val)
+		return recent_prefs_read(key, val) || panel_sizes_prefs_read(key, val)
 	}
 	return true
 }

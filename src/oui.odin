@@ -96,6 +96,7 @@ oui_slot :: proc(key, name: string, arg := 0, class := "slot", style := "") -> ^
 // is up; keys only while one of its text fields has focus, so Space, Enter and the arrows keep
 // working as shortcuts.
 oui_begin_frame :: proc() {
+	panel_edges_update() // a panel edge under the pointer, or being dragged, keeps it from everything else
 	oui.set_scale(uictx, ui.scale)
 	inp: oui.Input
 	inp.viewport = {f32(gfx.pw), f32(gfx.ph)}
@@ -147,6 +148,7 @@ oui_render :: proc() {
 	oui.render(uictx)
 	clip_depth = 0
 	clip_clear()
+	panel_edges_draw()
 }
 
 // A node's last laid-out box in the interface's logical pixels.

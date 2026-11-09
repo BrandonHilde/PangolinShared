@@ -32,6 +32,7 @@ ME_SEARCH_W :: 300
 ME_SEARCH_ROWS :: 14
 ME_LABEL_W :: 0 // widgets show their own label
 ME_CURVE_ROWS :: 7 // rows a curve takes on its node
+ME_SCROLL_W :: 6 // the side panel's scroll bar
 
 Me_Drag :: enum {
 	None,
@@ -443,9 +444,11 @@ macro_editor_ui :: proc(r: Rect) {
 	fill_rect(r, C_BG)
 	body := r
 	bar := cut_top(&body, ME_BAR_H)
-	// the side panels give way on a small window, so the canvas keeps most of it
-	lib := cut_left(&body, clamp(body.w / 6, 130, ME_LIB_W))
-	side := cut_right(&body, clamp(body.w / 5, 170, ME_SIDE_W))
+	// the side panels give way on a small window, so the canvas keeps most of it; their inner edges can be dragged
+	lib := cut_left(&body, panel_width(.Macro_Nodes, clamp(body.w / 6, 130, ME_LIB_W)))
+	side := cut_right(&body, panel_width(.Macro_Side, clamp(body.w / 5, 170, ME_SIDE_W)))
+	panel_track_drawn(.Macro_Nodes, lib, body)
+	panel_track_drawn(.Macro_Side, side, body)
 	me.canvas = body
 	me.origin = {f32(body.x), f32(body.y)}
 	if me.fit {
@@ -1480,6 +1483,35 @@ me_library :: proc(r: Rect) {
 // The panel on the right: the selected node's settings, and the document
 // ---------------------------------------------------------------------------
 
+// Shows that the settings go on past the panel, and where they are scrolled to. Drag the handle, or click the track
+// to jump there.
+@(private = "file")
+me_side_scrollbar :: proc(track: Rect, view_h: i32) {
+	@(static) grab: i32 // where on the handle the pointer took it
+	total := max(me.side_h, view_h + 1)
+	max_scroll := total - view_h
+	thumb_h := clamp(track.h * view_h / total, min(24, track.h), track.h)
+	travel := max(track.h - thumb_h, 1)
+	thumb := Rect{track.x, track.y + travel * me.side_scroll / max_scroll, track.w, thumb_h}
+	id := make_id(track, "me-side-scroll")
+	hover := ui_hover(track)
+	if hover {
+		tooltip_hover(id, {"", "There is more below: drag, or scroll with the wheel."})
+		if ui.pressed[0] && me.curve_id == 0 {
+			ui.active_id = id
+			ui.focus_id = 0
+			grab = in_rect(thumb, ui.mx, ui.my) ? ui.my - thumb.y : thumb_h / 2
+		}
+	}
+	held := ui.active_id == id && ui.down[0]
+	if held {
+		me.side_scroll = clamp((ui.my - grab - track.y) * max_scroll / travel, 0, max_scroll)
+		thumb.y = track.y + travel * me.side_scroll / max_scroll
+	}
+	draw_rrect(f32(track.x), f32(track.y), f32(track.w), f32(track.h), f32(track.w) / 2, C_PANEL_DK)
+	draw_rrect(f32(thumb.x), f32(thumb.y), f32(thumb.w), f32(thumb.h), f32(thumb.w) / 2, held ? C_ACCENT : hover ? C_HOVER : C_PANEL_LT)
+}
+
 @(private = "file")
 me_side :: proc(r: Rect) {
 	fill_rect(r, C_PANEL)
@@ -1504,9 +1536,13 @@ me_side :: proc(r: Rect) {
 		text(props.x, props.y, fmt.tprintf("\"%s\" isn't in this version.", n.kind), C_DANGER)
 		return
 	}
-	// a tall node (a curve, many settings) scrolls with the wheel
+	// a tall node (a curve, many settings) scrolls with the wheel, or the bar on the right
 	if ui_hover(props) && ui.wheel != 0 && me.curve_id == 0 do me.side_scroll -= i32(ui.wheel * 40)
 	me.side_scroll = clamp(me.side_scroll, 0, max(me.side_h - props.h, 0))
+	if me.side_h > props.h {
+		me_side_scrollbar(Rect{props.x + props.w - ME_SCROLL_W, props.y, ME_SCROLL_W, props.h}, props.h)
+		props.w -= ME_SCROLL_W + 6
+	}
 	y := props.y - me.side_scroll
 	text(props.x, y, def.name, WHITE)
 	text(props.x + props.w - text_w(def.category), y, def.category, C_TEXT_OFF)
@@ -1517,8 +1553,12 @@ me_side :: proc(r: Rect) {
 	}
 	y += 8
 	vals := macro_node_own_values(n, def)
-	// a row scrolled partly above the panel isn't drawn: hover doesn't know about clipping, and it would take clicks
-	shows :: proc(y, h: i32, props: Rect) -> bool {return y >= props.y && y < props.y + props.h}
+	// a row partly scrolled out is drawn, clipped. Hover doesn't know about clipping, so a pointer outside the settings
+	// (on the bar above, the document below) doesn't reach the rows at all, unless it is dragging or typing in one
+	shows :: proc(y, h: i32, props: Rect) -> bool {return y + h > props.y && y < props.y + props.h}
+	layer := ui.layer
+	defer ui.layer = layer
+	if !in_rect(props, ui.mx, ui.my) && ui.active_id == 0 && ui.focus_id == 0 && me.curve_id == 0 do ui.layer = -1
 	for i in shown_rows(n, def) {
 		s := &def.settings[i]
 		row := Rect{props.x, y, props.w, 16}
@@ -1555,4 +1595,9 @@ me_side :: proc(r: Rect) {
 		y += 16
 	}
 	me.side_h = y + me.side_scroll - props.y
+	// the settings fade out where they go on past the panel
+	FADE :: 18
+	x, w := f32(props.x), f32(props.w)
+	if me.side_scroll > 0 do draw_gradient(x, f32(props.y), w, FADE, C_PANEL, with_alpha(C_PANEL, 0))
+	if me.side_scroll < me.side_h - props.h do draw_gradient(x, f32(props.y + props.h) - FADE, w, FADE, with_alpha(C_PANEL, 0), C_PANEL)
 }
