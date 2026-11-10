@@ -173,6 +173,11 @@ gfx_error :: proc() -> string {
 
 gfx_init :: proc(title: cstring, shot: bool, force_w := 0, force_h := 0) -> bool {
 	sdl.SetHint("SDL_RENDER_VSYNC", "1")
+	when ODIN_OS == .Linux {
+		// X11 (XWayland on a Wayland desktop) first, as Krita does: SDL's Wayland backend never reports
+		// the pen's eraser end. Setting SDL_VIDEO_DRIVER still picks the driver.
+		sdl.SetHint(sdl.HINT_VIDEO_DRIVER, "x11,wayland")
+	}
 	if !sdl.Init({.VIDEO, .EVENTS}) {
 		return false
 	}

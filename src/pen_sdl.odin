@@ -72,5 +72,13 @@ pen_handle_event :: proc(e: ^sdl.Event) {
 			pen.tilt.y = a.value
 		}
 		if pen_debug do fmt.println("pen: axis", a.axis, a.value)
+	case .MOUSE_MOTION, .MOUSE_BUTTON_DOWN:
+		// The real mouse moved: the pen has left. X11 (XWayland) never reports the pen leaving,
+		// so without this the mouse would stay tied to the pen's last position and end.
+		which := e.type == .MOUSE_MOTION ? e.motion.which : e.button.which
+		if which != sdl.PEN_MOUSEID && pen.in_range && !pen.touching {
+			pen.in_range, pen.eraser = false, false
+			if pen_debug do fmt.println("pen: the mouse took over")
+		}
 	}
 }
