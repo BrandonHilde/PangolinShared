@@ -906,7 +906,8 @@ Popup_Item :: struct {
 	has_icon: bool,
 	color:    Color, // swatch shown beside the label
 	has_color: bool,
-	half:     bool, // text item taking half a row
+	half:     bool, // text item taking half a row (a third in a long list)
+	head:     bool, // starts a new column under this heading
 	// a strip of colours at the right edge (palette presets). Copied, so the source can be a temporary.
 	pal:      [8]Color,
 	pal_n:    int,
@@ -923,7 +924,8 @@ Popup :: struct {
 	above:     bool,
 	side:      bool, // open to the right of the anchor
 	grid:      bool, // visual picker: icon items in a grid, other items as full-width rows
-	cols:      int,
+	cols:      int, // icons per row
+
 }
 
 popup: Popup
@@ -945,6 +947,11 @@ popup_begin :: proc(owner: u32, anchor: Rect, min_w: i32 = 0, menu_idx := -1) {
 popup_grid :: proc(cols: int) {
 	popup.grid = true
 	popup.cols = cols
+}
+
+// Grid popups: starts a new column, side by side with the others, under this heading.
+popup_column :: proc(title: string) {
+	append(&popup.items, Popup_Item{label = make_name(title), head = true})
 }
 
 popup_item_icon :: proc(label: string, value: int, ic: Icon, tip: string) {
@@ -1109,70 +1116,137 @@ popup_run :: proc() {
 GRID_CELL :: 28
 GRID_GAP :: 2
 GRID_ROW_H :: 20
+GRID_HEAD_H :: 16
 GRID_FOOT_H :: 18
+GRID_PAD :: 6
+GRID_COL_GAP :: 15 // between columns, a divider in the middle
+GRID_PAL_CW :: 7 // one colour of a palette strip
 
-// Visual picker: icon items flow in a grid, a separator or a plain item starts a new row.
+// Visual picker. Each popup_column heading starts a column, and the columns sit side by
+// side (wrapping below when the window is too narrow). Inside a column icon items flow in
+// a grid, half items two or three to a row, and a separator or plain item takes a full row.
 popup_run_grid :: proc() {
 	cols := max(popup.cols, 1)
 	pitch := i32(GRID_CELL + GRID_GAP)
-	w := i32(cols) * pitch - GRID_GAP + 8
+	icons_w := i32(cols) * pitch - GRID_GAP
 	rects := make([]Rect, len(popup.items), context.temp_allocator)
-	cy: i32 = 4
-	col := 0
-	hcol := 0
-	hw := (w - 8 - GRID_GAP) / 2
-	for &it, i in popup.items {
-		if it.half {
+
+	Col :: struct {
+		first, last: int, // items, last exclusive
+		x, y, w, h:  i32, // inside the popup's padding
+		band:        int,
+	}
+	columns := make([dynamic]Col, 0, 8, context.temp_allocator)
+	for it, i in popup.items {
+		if it.head || len(columns) == 0 {
+			append(&columns, Col{first = i})
+		}
+		columns[len(columns) - 1].last = i + 1
+	}
+
+	any_icon := false
+	for &c in columns {
+		items := popup.items[c.first:c.last]
+		halves := 0
+		for it in items do if it.half do halves += 1
+		per_row := halves > 12 ? 3 : 2
+		// as wide as the icon grid or the widest item, whichever is more
+		w := icons_w
+		for &it in items {
+			lw := text_w(name_str(&it.label))
+			switch {
+			case it.sep:
+			case it.has_icon:
+				any_icon = true
+			case it.head:
+				w = max(w, lw + 24)
+			case it.half:
+				w = max(w, i32(per_row) * (lw + 16) + i32(per_row - 1) * GRID_GAP)
+			case:
+				need := lw + 16
+				if it.has_color do need += 18
+				if it.pal_n > 0 do need += i32(it.pal_n) * GRID_PAL_CW + 14
+				w = max(w, need)
+			}
+		}
+		hw := (w - i32(per_row - 1) * GRID_GAP) / i32(per_row)
+		cy: i32 = 0
+		col, hcol := 0, 0
+		for &it, k in items {
+			i := c.first + k
+			if it.half {
+				if col > 0 {
+					col = 0
+					cy += pitch
+				}
+				rects[i] = Rect{i32(hcol) * (hw + GRID_GAP), cy, hw, GRID_ROW_H}
+				hcol += 1
+				if hcol == per_row {
+					hcol = 0
+					cy += GRID_ROW_H + GRID_GAP
+				}
+				continue
+			}
+			if hcol > 0 {
+				hcol = 0
+				cy += GRID_ROW_H + GRID_GAP
+			}
+			if it.has_icon {
+				rects[i] = Rect{i32(col) * pitch, cy, GRID_CELL, GRID_CELL}
+				col += 1
+				if col == cols {
+					col = 0
+					cy += pitch
+				}
+				continue
+			}
 			if col > 0 {
 				col = 0
 				cy += pitch
 			}
-			rects[i] = Rect{4 + i32(hcol) * (hw + GRID_GAP), cy, hw, GRID_ROW_H}
-			hcol += 1
-			if hcol == 2 {
-				hcol = 0
+			switch {
+			case it.head:
+				rects[i] = Rect{0, cy, w, GRID_HEAD_H}
+				cy += GRID_HEAD_H + 4
+			case it.sep:
+				rects[i] = Rect{0, cy + 2, w, 1}
+				cy += 7
+			case:
+				rects[i] = Rect{0, cy, w, GRID_ROW_H}
 				cy += GRID_ROW_H + GRID_GAP
 			}
-			continue
 		}
-		if hcol > 0 {
-			hcol = 0
-			cy += GRID_ROW_H + GRID_GAP
-		}
-		if it.has_icon {
-			rects[i] = Rect{4 + i32(col) * pitch, cy, GRID_CELL, GRID_CELL}
-			col += 1
-			if col == cols {
-				col = 0
-				cy += pitch
+		if col > 0 do cy += pitch
+		if hcol > 0 do cy += GRID_ROW_H + GRID_GAP
+		c.w, c.h = w, max(cy - GRID_GAP, 0)
+	}
+
+	// columns side by side; one that would run past the window starts a new band below
+	max_w := i32(ui.w) - 2 * GRID_PAD
+	band_h := make([dynamic]i32, 1, 4, context.temp_allocator)
+	cx, by, content_w: i32 = 0, 0, 0
+	for &c, ci in columns {
+		if ci > 0 {
+			if cx + GRID_COL_GAP + c.w > max_w {
+				by += band_h[len(band_h) - 1] + GRID_COL_GAP
+				append(&band_h, 0)
+				cx = 0
+			} else {
+				cx += GRID_COL_GAP
 			}
-			continue
 		}
-		if col > 0 {
-			col = 0
-			cy += pitch
-		}
-		if it.sep {
-			rects[i] = Rect{4, cy + 2, w - 8, 1}
-			cy += 7
-		} else {
-			rects[i] = Rect{4, cy, w - 8, GRID_ROW_H}
-			cy += GRID_ROW_H + GRID_GAP
-		}
+		c.x, c.y, c.band = cx, by, len(band_h) - 1
+		cx += c.w
+		content_w = max(content_w, cx)
+		band_h[c.band] = max(band_h[c.band], c.h)
 	}
-	if col > 0 {
-		cy += pitch
-	}
-	if hcol > 0 {
-		cy += GRID_ROW_H + GRID_GAP
-	}
-	h := cy + 2 + GRID_FOOT_H
+	foot_h: i32 = any_icon ? GRID_FOOT_H : 0
+	w := content_w + 2 * GRID_PAD
+	h := by + band_h[len(band_h) - 1] + 2 * GRID_PAD + foot_h
 
 	x := popup.anchor.x
 	y := popup.anchor.y + popup.anchor.h
-	if x + w > i32(ui.w) {
-		x = i32(ui.w) - w
-	}
+	x = max(min(x, i32(ui.w) - w), 0)
 	if y + h > i32(ui.h) {
 		y = max(i32(ui.h) - h, 0)
 	}
@@ -1182,42 +1256,71 @@ popup_run_grid :: proc() {
 	draw_rrect_outline(f32(box.x), f32(box.y), f32(box.w), f32(box.h), 6, C_RING_HI)
 
 	hovered := -1
-	for &it, i in popup.items {
-		ir := rects[i]
-		ir.x += box.x
-		ir.y += box.y
-		if it.sep {
-			hline(ir.x, ir.y, ir.w, C_RING_HI)
-			continue
+	for c, ci in columns {
+		ox := box.x + GRID_PAD + c.x
+		oy := box.y + GRID_PAD + c.y
+		// a divider between neighbouring columns, the full height of their band
+		if ci > 0 && columns[ci - 1].band == c.band {
+			vline(ox - (GRID_COL_GAP + 1) / 2, oy + 2, band_h[c.band] - 4, C_RING_HI)
 		}
-		tip_area(ir, "popup", Tip{name_str(&it.label), it.tip})
-		hover := ui_hover(ir) && it.enabled
-		if hover {
-			hovered = i
-		}
-		ctl_surface(ir, hover ? C_HOVER : C_PANEL_LT, hover ? C_RING_HI : C_RING)
-		if it.has_icon {
-			icon_centered(it.icon, ir, hover ? WHITE : C_TEXT, ICON_SIZE_LG)
-		} else {
-			tx := ir.x + 8
-			if it.has_color {
-				sw := Rect{ir.x + 5, ir.y + 4, 12, ir.h - 8}
-				draw_rrect(f32(sw.x), f32(sw.y), f32(sw.w), f32(sw.h), 2, it.color)
-				draw_rrect_outline(f32(sw.x), f32(sw.y), f32(sw.w), f32(sw.h), 2, C_RING_HI)
-				tx = sw.x + sw.w + 6
+		for &it, k in popup.items[c.first:c.last] {
+			i := c.first + k
+			ir := rects[i]
+			ir.x += ox
+			ir.y += oy
+			if it.sep {
+				hline(ir.x, ir.y, ir.w, C_RING_HI)
+				continue
 			}
-			text(tx, ir.y + (ir.h - FONT_CAP) / 2, name_str(&it.label), hover ? WHITE : C_TEXT)
-		}
-		if hover && ui.pressed[0] {
-			ui.popup_result_id = popup.owner
-			ui.popup_result_val = it.value
-			popup_close()
-			return
+			label := name_str(&it.label)
+			if it.head {
+				// "Title ────": the heading with a rule running to the column's edge
+				ty := ir.y + (ir.h - FONT_CAP) / 2
+				text(ir.x + 1, ty, label, C_ACCENT)
+				tw := text_w(label) + 8
+				if ir.w > tw do hline(ir.x + tw, ir.y + ir.h / 2, ir.w - tw, C_RING_HI)
+				continue
+			}
+			tip_area(ir, "popup", Tip{label, it.tip})
+			hover := ui_hover(ir) && it.enabled
+			if hover {
+				hovered = i
+			}
+			ctl_surface(ir, hover ? C_HOVER : C_PANEL_LT, hover ? C_RING_HI : C_RING)
+			if it.has_icon {
+				icon_centered(it.icon, ir, hover ? WHITE : C_TEXT, ICON_SIZE_LG)
+			} else {
+				tx := ir.x + 8
+				if it.has_color {
+					sw := Rect{ir.x + 5, ir.y + 4, 12, ir.h - 8}
+					draw_rrect(f32(sw.x), f32(sw.y), f32(sw.w), f32(sw.h), 2, it.color)
+					draw_rrect_outline(f32(sw.x), f32(sw.y), f32(sw.w), f32(sw.h), 2, C_RING_HI)
+					tx = sw.x + sw.w + 6
+				}
+				text(tx, ir.y + (ir.h - FONT_CAP) / 2, label, hover ? WHITE : C_TEXT)
+				if it.pal_n > 0 {
+					strip := Rect{ir.x + ir.w - i32(it.pal_n) * GRID_PAL_CW - 6, ir.y + 5, i32(it.pal_n) * GRID_PAL_CW, ir.h - 10}
+					for p in 0 ..< it.pal_n {
+						fill_rect(Rect{strip.x + i32(p) * GRID_PAL_CW, strip.y, GRID_PAL_CW, strip.h}, it.pal[p])
+					}
+					draw_rrect_outline(f32(strip.x), f32(strip.y), f32(strip.w), f32(strip.h), 1, C_RING_HI)
+				}
+			}
+			if hover && ui.pressed[0] {
+				ui.popup_result_id = popup.owner
+				ui.popup_result_val = it.value
+				popup_close()
+				return
+			}
 		}
 	}
-	// the hovered item's name in the footer
-	if hovered >= 0 {
-		text(box.x + 8, box.y + box.h - GRID_FOOT_H + (GRID_FOOT_H - FONT_CAP) / 2 - 1, name_str(&popup.items[hovered].label), C_TEXT_DIM)
+	// the hovered item's name in the footer (icons show no text of their own)
+	if foot_h > 0 {
+		fy := box.y + box.h - foot_h
+		hline(box.x + GRID_PAD, fy, box.w - 2 * GRID_PAD, C_RING)
+		if hovered >= 0 {
+			text(box.x + GRID_PAD + 2, fy + (foot_h - FONT_CAP) / 2, name_str(&popup.items[hovered].label), C_TEXT_DIM)
+		}
 	}
 	if (ui.pressed[0] || ui.pressed[1]) && !in_rect(box, ui.mx, ui.my) {
 		popup_close()
@@ -1362,6 +1465,12 @@ dialog_scroll: i32
 dialog_scroll_id: u32
 @(private = "file")
 dialog_clipped: bool
+// Where the docked windows (adjustments and filters) have been dragged to, from their place at the canvas's
+// top right. Kept for the session, so the next one opens where the last was left.
+@(private = "file")
+dialog_dock_off: [2]i32
+@(private = "file")
+dialog_drag_from: [2]i32 // the pointer, less the offset, when the drag began
 
 // Draws the dim background and the window frame; returns the content area. A window is never larger than
 // the program's: one that does not fit gets narrower, and its content scrolls with the mouse wheel.
@@ -1378,6 +1487,29 @@ dialog_frame :: proc(title: string, w_in, h_in: i32, dim := true, docked := fals
 	if docked {
 		x = max(canvas_vp.x + canvas_vp.w - w - 12, 4)
 		y = min(canvas_vp.y + 12, i32(ui.h) - h - 4)
+		// dragged by its title bar, out of the way of the part of the painting being worked on
+		DRAG_ID :: 0x7d0c_d1a6
+		bar := Rect{x + dialog_dock_off.x, y + dialog_dock_off.y, w, 20}
+		if ui_hover(bar) && ui.active_id == 0 {
+			ui.cursor = .RESIZE_ALL
+			if ui.pressed[0] {
+				ui.active_id = DRAG_ID
+				dialog_drag_from = {ui.mx - dialog_dock_off.x, ui.my - dialog_dock_off.y}
+			}
+		}
+		if ui.active_id == DRAG_ID {
+			ui.cursor = .RESIZE_ALL
+			if ui.down[0] {
+				dialog_dock_off = {ui.mx - dialog_drag_from.x, ui.my - dialog_drag_from.y}
+			} else {
+				ui.active_id = 0
+			}
+		}
+		// the title bar always stays on screen, so the window can be dragged back
+		nx := clamp(x + dialog_dock_off.x, 40 - w, i32(ui.w) - 40)
+		ny := clamp(y + dialog_dock_off.y, 0, i32(ui.h) - 20)
+		dialog_dock_off = {nx - x, ny - y}
+		x, y = nx, ny
 	}
 	box := Rect{x, y, w, h}
 	draw_shadow(f32(x), f32(y + 6), f32(w), f32(h), 7, 22, Color{0, 0, 0, 190})
