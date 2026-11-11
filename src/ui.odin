@@ -1331,11 +1331,12 @@ popup_run_grid :: proc() {
 }
 
 // Drop-down selector. Returns the newly picked index (one frame after the click).
-combo :: proc(r: Rect, items: []string, cur: int, tip: Tip) -> (new_val: int, changed: bool) {
+// `shown`, when given, is shown in place of the current item's text.
+combo :: proc(r: Rect, items: []string, cur: int, tip: Tip, shown := "") -> (new_val: int, changed: bool) {
 	id := make_id(r, "combo")
 	clicked, held, hover := button_behavior(id, r, tip)
 	fg := ctl_state(r, hover, held || popup.open && popup.owner == id, false, true)
-	s := cur >= 0 && cur < len(items) ? items[cur] : ""
+	s := shown != "" ? shown : cur >= 0 && cur < len(items) ? items[cur] : ""
 	text_clipped(Rect{r.x + 5, r.y, r.w - 20, r.h}, s, fg)
 	icon(.Down, r.x + r.w - 14, r.y + (r.h - ICON_SIZE) / 2, C_TEXT_DIM)
 	if ui.popup_result_id == id {

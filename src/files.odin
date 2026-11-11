@@ -108,9 +108,10 @@ files_prefs_write :: proc(sb: ^strings.Builder) {
 	fmt.sbprintf(sb, "files_dir=%s\n", files_dir)
 	recent_prefs_write(sb)
 	panel_sizes_prefs_write(sb)
+	preset_prefs_write(sb)
 }
 
-// Takes the keys the file browser (and the panel sizes) save; false if `key` is not one of them.
+// Takes the keys the file browser (and the panel sizes and the user's presets) save; false if `key` is not one of them.
 files_prefs_read :: proc(key, val: string) -> bool {
 	switch key {
 	case "bottom_panel":
@@ -119,7 +120,7 @@ files_prefs_read :: proc(key, val: string) -> bool {
 		delete(files_dir)
 		files_dir = strings.clone(val)
 	case:
-		return recent_prefs_read(key, val) || panel_sizes_prefs_read(key, val)
+		return recent_prefs_read(key, val) || panel_sizes_prefs_read(key, val) || preset_prefs_read(key, val)
 	}
 	return true
 }

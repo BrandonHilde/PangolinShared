@@ -94,11 +94,12 @@ obutton :: proc(label: string, w: i32, tip: Tip, enabled := true, highlight := f
 
 // Drop-down selector, like `combo`: returns the picked index (one frame after the click); the
 // wheel or up / down while hovered steps through the items.
-ocombo :: proc(key: string, w: i32, items: []string, cur: int, tip: Tip, id := "") -> (new_val: int, changed: bool) {
+// `shown`, when given, is shown in place of the current item's text.
+ocombo :: proc(key: string, w: i32, items: []string, cur: int, tip: Tip, id := "", shown := "") -> (new_val: int, changed: bool) {
 	nid := make_id({}, key) // popup owner
 	is_open := popup.open && popup.owner == nid
 	n := oui.button_begin(uictx, key, {id = id, class = is_open ? "combo open" : "combo", style = width_style(w)})
-	oui.label(uictx, "t", cur >= 0 && cur < len(items) ? items[cur] : "", {class = "combo-text"})
+	oui.label(uictx, "t", shown != "" ? shown : cur >= 0 && cur < len(items) ? items[cur] : "", {class = "combo-text"})
 	oui.label(uictx, "caret", icon_text(.Down), {class = "icon combo-caret"})
 	oui.end(uictx)
 	oui_tip(n, tip)
