@@ -75,8 +75,9 @@ jobs:
         run: cd dist && 7z a "../$APP-$VERSION-windows.zip" "$APP-$VERSION-windows" > /dev/null
       - uses: actions/upload-artifact@v7
         with:
-          name: windows
+          # as it is, not zipped again by GitHub: it downloads as the bundle's own .zip
           path: ${{ env.APP }}-${{ env.VERSION }}-windows.zip
+          archive: false
 
   linux:
     needs: version
@@ -126,8 +127,9 @@ jobs:
         run: tar czf "$APP-$VERSION-linux.tar.gz" -C dist "$APP-$VERSION-linux"
       - uses: actions/upload-artifact@v7
         with:
-          name: linux
+          # as it is, not zipped again by GitHub: it downloads as the .tar.gz (keeping file modes)
           path: ${{ env.APP }}-${{ env.VERSION }}-linux.tar.gz
+          archive: false
 
   macos:
     needs: version
@@ -174,11 +176,13 @@ jobs:
         run: ditto -c -k --keepParent "dist/$APP-$VERSION-macos" "$APP-$VERSION-macos.zip"
       - uses: actions/upload-artifact@v7
         with:
-          name: macos
+          # as it is, not zipped again by GitHub: it downloads as the bundle's own .zip
           path: ${{ env.APP }}-${{ env.VERSION }}-macos.zip
+          archive: false
 
+  # On a tag, makes the draft release. On Run workflow, checks the three bundles come back intact
+  # (so a tag's release step has been tried) and stops there.
   release:
-    if: github.ref_type == 'tag'
     needs: [version, windows, linux, macos]
     runs-on: ubuntu-latest
     env:
@@ -190,10 +194,18 @@ jobs:
         with:
           path: bundles
           merge-multiple: true
+      - name: Check the bundles
+        run: |
+          ls -la bundles
+          for f in "$APP-$VERSION-windows.zip" "$APP-$VERSION-macos.zip"; do
+            unzip -tq "bundles/$f" || { echo "::error::bundles/$f is missing or not a zip"; exit 1; }
+          done
+          tar tzf "bundles/$APP-$VERSION-linux.tar.gz" > /dev/null || { echo "::error::the Linux bundle is missing or broken"; exit 1; }
+          tar tzvf "bundles/$APP-$VERSION-linux.tar.gz" | grep -q "^-rwx.* $APP-$VERSION-linux/$APP\$" || { echo "::error::the Linux program lost its executable bit"; exit 1; }
       - name: Draft release
+        if: github.ref_type == 'tag'
         run: |
           name="$(sed -n 's/^APP_NAME :: "\(.*\)".*/\1/p' src/brand.odin)"
-          ls -la bundles
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" bundles/* --clobber
           else
