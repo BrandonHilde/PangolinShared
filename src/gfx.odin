@@ -2,7 +2,9 @@ package pangolin
 
 import "base:runtime"
 import "core:c"
+import "core:fmt"
 import "core:math"
+import "core:os"
 import "core:strings"
 import "core:unicode/utf8"
 import sdl "vendor:sdl3"
@@ -242,8 +244,49 @@ gfx_set_title :: proc(s: string) {
 	sdl.SetWindowTitle(gfx.win, strings.clone_to_cstring(s, context.temp_allocator))
 }
 
+// The program's own folder (with a trailing separator).
 gfx_app_dir :: proc() -> string {
 	return string(sdl.GetBasePath())
+}
+
+@(private = "file")
+data_dir: string
+
+// Where the user's own files go: settings, workspaces, macros and theme.css (with a trailing separator).
+// Next to the program when that folder can be written, so an unzipped folder stays portable; otherwise
+// (Program Files, /opt, a read-only mount) the user's data folder: %APPDATA%\Pangolin\<program> on Windows,
+// ~/.local/share/Pangolin/<program> on Linux. On macOS always the user's folder,
+// ~/Library/Application Support/Pangolin/<program>: files written inside a signed .app break its signature,
+// and a downloaded app can be run from a read-only copy.
+gfx_data_dir :: proc() -> string {
+	if data_dir != "" do return data_dir
+	base := gfx_app_dir()
+	use_base := ODIN_OS != .Darwin && dir_writable(base)
+	if !use_base {
+		// the program's file name, without .exe: PangolinPaints
+		name := os.args[0]
+		if i := strings.last_index_any(name, "/\\"); i >= 0 do name = name[i + 1:]
+		name = strings.trim_suffix(name, ".exe")
+		name = strings.trim_suffix(name, "-console")
+		if name == "" do name = "Pangolin"
+		cname := strings.clone_to_cstring(name, context.temp_allocator)
+		if p := sdl.GetPrefPath("Pangolin", cname); p != nil {
+			data_dir = strings.clone(string(cstring(p)))
+			sdl.free(p)
+			return data_dir
+		}
+	}
+	data_dir = strings.clone(base)
+	return data_dir
+}
+
+// Whether files can be made in `dir`: tries one.
+@(private = "file")
+dir_writable :: proc(dir: string) -> bool {
+	probe := fmt.tprintf("%s.pangolin-write-test", dir)
+	if os.write_entire_file_from_bytes(probe, {}) != nil do return false
+	os.remove(probe)
+	return true
 }
 
 gfx_hwnd :: proc() -> rawptr {

@@ -61,7 +61,7 @@ slot_by_src: map[string]oui.Image
 
 // The user's theme file: loaded over the default theme and watched.
 user_theme_path :: proc() -> string {
-	return fmt.tprintf("%stheme.css", gfx_app_dir())
+	return fmt.tprintf("%stheme.css", gfx_data_dir())
 }
 
 oui_init :: proc() {
