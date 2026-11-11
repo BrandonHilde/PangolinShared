@@ -46,7 +46,11 @@ MouseCursor :: enum {
 	RESIZE_NESW,
 	RESIZE_ALL,
 	NOT_ALLOWED,
+	TOOL, // one built from an icon: ui_tool_cursor (cursors.odin) sets it
 }
+
+// A cursor made from pixels (gfx_cursor_create).
+Cursor_Handle :: distinct rawptr
 
 KeyboardKey :: enum i32 {
 	KEY_NULL      = 0,
@@ -456,6 +460,8 @@ gfx_clipboard_set :: proc(s: string) {
 }
 
 gfx_set_cursor :: proc(c: MouseCursor) {
+	c := c
+	if c == .TOOL do c = .CROSSHAIR // the tool cursor itself is set with gfx_cursor_set; this is its stand-in
 	if gfx.cursors[c] == nil {
 		id: sdl.SystemCursor
 		switch c {
@@ -479,10 +485,39 @@ gfx_set_cursor :: proc(c: MouseCursor) {
 			id = .MOVE
 		case .NOT_ALLOWED:
 			id = .NOT_ALLOWED
+		case .TOOL:
+			id = .CROSSHAIR
 		}
 		gfx.cursors[c] = sdl.CreateSystemCursor(id)
 	}
 	_ = sdl.SetCursor(gfx.cursors[c])
+}
+
+// A cursor from straight-alpha pixels, `w` x `h`, pointing with the pixel at (hot_x, hot_y). Nil if the system refuses.
+gfx_cursor_create :: proc(pix: []Color, w, h, hot_x, hot_y: int) -> Cursor_Handle {
+	surf := sdl.CreateSurfaceFrom(i32(w), i32(h), .RGBA32, raw_data(pix), i32(w * 4))
+	if surf == nil do return nil
+	defer sdl.DestroySurface(surf)
+	return Cursor_Handle(sdl.CreateColorCursor(surf, i32(hot_x), i32(hot_y)))
+}
+
+// How big the system draws its own cursors, as a multiple of the usual 24 pixels, in the units a cursor's pixels are
+// given in. It follows the display's scale setting, not the app's UI scale.
+gfx_cursor_scale :: proc() -> f32 {
+	id := sdl.GetDisplayForWindow(gfx.win)
+	if id == 0 do id = sdl.GetPrimaryDisplay()
+	s := sdl.GetDisplayContentScale(id)
+	if s <= 0 do s = 1
+	// where window coordinates are not physical pixels the system scales the cursor up itself
+	return max(s / max(sdl.GetWindowPixelDensity(gfx.win), 1), 1)
+}
+
+gfx_cursor_set :: proc(c: Cursor_Handle) {
+	_ = sdl.SetCursor((^sdl.Cursor)(c))
+}
+
+gfx_cursor_destroy :: proc(c: Cursor_Handle) {
+	if c != nil do sdl.DestroyCursor((^sdl.Cursor)(c))
 }
 
 gfx_show_cursor :: proc(show: bool) {

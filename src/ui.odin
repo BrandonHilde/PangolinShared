@@ -78,6 +78,7 @@ UI :: struct {
 	dbl_click:           bool,
 	ctrl, shift, alt:    bool,
 	hide_cursor:         bool,
+	tool_cursor:         Tool_Cursor, // shown while cursor is .TOOL
 }
 
 ui: UI
@@ -299,7 +300,11 @@ ui_end_frame :: proc() {
 	if !ui.down[0] && !ui.down[1] {
 		ui.active_id = 0
 	}
-	gfx_set_cursor(ui.cursor)
+	if ui.cursor == .TOOL {
+		tool_cursor_apply(ui.tool_cursor)
+	} else {
+		gfx_set_cursor(ui.cursor)
+	}
 	@(static) hidden: bool
 	if ui.hide_cursor != hidden {
 		hidden = ui.hide_cursor
