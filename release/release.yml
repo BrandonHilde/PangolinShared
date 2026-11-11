@@ -28,7 +28,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: v
         name: Read APP_VERSION
         run: |
@@ -45,7 +45,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install Odin
@@ -73,7 +73,7 @@ jobs:
       - name: Zip
         shell: bash
         run: cd dist && 7z a "../$APP-$VERSION-windows.zip" "$APP-$VERSION-windows" > /dev/null
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: ${{ env.APP }}-${{ env.VERSION }}-windows.zip
@@ -85,7 +85,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install build tools and SDL's dependencies
@@ -118,24 +118,25 @@ jobs:
       - name: Self test (with the bundled SDL3)
         run: |
           cd "dist/$APP-$VERSION-linux"
-          ldd "./$APP" | grep -q "$(pwd)/libSDL3.so.0" || { echo "::error::the program doesn't load the bundled libSDL3"; ldd "./$APP"; exit 1; }
+          # ldd prints the bundled one as <this folder>/./libSDL3.so.0
+          ldd "./$APP" | grep libSDL3 | grep -q "=> $(pwd)/" || { echo "::error::the program doesn't load the bundled libSDL3"; ldd "./$APP"; exit 1; }
           xvfb-run -a "./$APP" --selftest
           "./$APP" --version
       - name: Archive
         run: tar czf "$APP-$VERSION-linux.tar.gz" -C dist "$APP-$VERSION-linux"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: ${{ env.APP }}-${{ env.VERSION }}-linux.tar.gz
 
   macos:
     needs: version
-    runs-on: macos-14 # Apple silicon
+    runs-on: macos-latest # Apple silicon
     env:
       VERSION: ${{ needs.version.outputs.version }}
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install Odin
@@ -171,7 +172,7 @@ jobs:
       - name: Zip
         # ditto keeps the app's symlinks, permissions and signature intact
         run: ditto -c -k --keepParent "dist/$APP-$VERSION-macos" "$APP-$VERSION-macos.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: ${{ env.APP }}-${{ env.VERSION }}-macos.zip
@@ -184,8 +185,8 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: bundles
           merge-multiple: true
