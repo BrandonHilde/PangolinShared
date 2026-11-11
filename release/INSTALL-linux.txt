@@ -1,0 +1,53 @@
+{{NAME}} {{VERSION}} for Linux
+=======================================
+
+This is a beta: thank you for trying it. Please tell us what goes wrong (see "Reporting a problem" below).
+It runs on 64-bit (x86-64) Linux with glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Fedora 36 or later,
+and most current distributions.
+
+
+Starting it
+-----------
+
+1. Extract the archive, in a file manager (right-click > Extract Here) or in a terminal:
+       tar xzf {{APP}}-{{VERSION}}-linux.tar.gz
+
+2. Run {{APP}} in the extracted folder: double-click it, or in a terminal
+       cd {{APP}}-{{VERSION}}-linux
+       ./{{APP}}
+
+Nothing else needs installing: the SDL3 library it uses (libSDL3.so.0) is in the folder, next to the
+program. Keep the files together.
+
+To add it to your application menu with its icon, run this from the folder:
+       ./install.sh --no-build
+It copies the program to ~/.local/opt/pangolin/{{APP}}. ./install.sh --uninstall takes it out again.
+
+
+Things that help
+----------------
+
+  - Open and Save dialogs use zenity (GNOME and most desktops) or kdialog (KDE). If clicking Open does
+    nothing, install one of them, e.g. "sudo apt install zenity" or "sudo dnf install zenity".
+  - Drawing tablets: pen pressure and the eraser end work through your desktop's tablet driver (libinput
+    or the Wacom driver). The app prefers X11 (XWayland on a Wayland desktop), where pens work most
+    reliably.
+
+
+Where your settings are kept
+----------------------------
+
+Settings, workspaces and macros are saved in the same folder as the program, so the folder is portable.
+If that folder can't be written to (for example after installing it somewhere read-only), they are saved
+in ~/.local/share/Pangolin/{{APP}} instead. "./{{APP}} --version" prints which.
+
+
+Reporting a problem
+-------------------
+
+Open an issue at https://github.com/BrandonHilde/{{APP}}/issues and include:
+
+  - your distribution and version, and your desktop (GNOME, KDE ...) and whether it's Wayland or X11,
+  - the output of "./{{APP}} --version",
+  - what you did, what you expected, and what happened instead (a screenshot helps),
+  - if it's about pictures not looking right or crashes, the output of "./{{APP}} --selftest".

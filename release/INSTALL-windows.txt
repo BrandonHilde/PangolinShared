@@ -1,0 +1,55 @@
+{{NAME}} {{VERSION}} for Windows
+=========================================
+
+This is a beta: thank you for trying it. Please tell us what goes wrong (see "Reporting a problem" below).
+
+
+Starting it
+-----------
+
+1. Extract the whole zip first: right-click it > Extract All..., then pick a folder you can find again,
+   such as Documents or your Desktop. (Running it from inside the zip, without extracting, won't work.)
+
+2. Open the extracted folder and double-click {{APP}}.exe.
+
+3. The first time, Windows will probably show a blue box: "Windows protected your PC".
+   This is because the beta isn't signed with a paid certificate yet, not because anything is wrong.
+   Click "More info", then "Run anyway". Windows remembers, so this happens only once.
+
+Nothing else needs installing. Keep the files in the folder together: {{APP}}.exe needs SDL3.dll next to it.
+
+You can make a shortcut: right-click {{APP}}.exe > Show more options > Send to > Desktop (create shortcut),
+or drag it to the taskbar.
+
+
+Where your settings are kept
+----------------------------
+
+Settings, workspaces and macros are saved in the same folder as {{APP}}.exe, so the folder is portable:
+copy it to a USB stick and your set-up comes along.
+
+If that folder can't be written to (for example if you put it in C:\Program Files), they are saved in
+%APPDATA%\Pangolin\{{APP}} instead. Type that into the File Explorer address bar to open it.
+
+Your pictures are saved wherever you choose when you save them.
+
+
+Updating or removing it
+-----------------------
+
+To update, extract the new version's zip over the old folder (or into a new folder and copy your .cfg file,
+workspaces and macros folders across). To remove it, delete the folder.
+
+
+Reporting a problem
+-------------------
+
+Open an issue at https://github.com/BrandonHilde/{{APP}}/issues and include:
+
+  - your Windows version (Settings > System > About),
+  - the version from Help > About in the app (it looks like "{{VERSION}} (1a2b3c4)"),
+  - what you did, what you expected, and what happened instead (a screenshot helps),
+  - if it's about pictures not looking right or crashes, the output of the self test:
+    open the folder, click the address bar, type cmd and press Enter, then run
+        {{APP}}-console.exe --selftest
+    and copy what it prints.

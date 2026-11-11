@@ -1,0 +1,60 @@
+{{NAME}} {{VERSION}} for macOS
+=======================================
+
+This is a beta: thank you for trying it. Please tell us what goes wrong (see "Reporting a problem" below).
+It runs on Macs with Apple silicon (M1 or newer) and macOS 11 or later.
+
+
+Starting it
+-----------
+
+1. Double-click the zip to unpack it (Safari may already have done this for you).
+
+2. Drag "{{NAME}}" to your Applications folder (or anywhere you like).
+
+3. Double-click it. The first time, macOS will stop it, because the beta isn't notarized by Apple yet
+   (that needs a paid developer account). Nothing is wrong with it. To let it run:
+
+   macOS 15 (Sequoia) or later:
+     a. Double-click the app. A message says it can't be opened, or was blocked. Click "Done" (not
+        "Move to Trash").
+     b. Open System Settings > Privacy & Security and scroll down to Security.
+     c. Next to '"{{NAME}}" was blocked...', click "Open Anyway", then confirm with your password.
+
+   macOS 14 (Sonoma) or earlier:
+     Right-click (or Control-click) the app, choose "Open", then click "Open" in the box that appears.
+
+   macOS remembers your choice, so this happens only once.
+
+   If you're comfortable with Terminal, this does the same in one step (adjust the path if you put the
+   app somewhere else):
+       xattr -dr com.apple.quarantine "/Applications/{{NAME}}.app"
+
+
+Where your settings are kept
+----------------------------
+
+Settings, workspaces and macros are saved in:
+    ~/Library/Application Support/Pangolin/{{APP}}
+(In Finder: Go > Go to Folder..., then paste that path.)
+
+Your pictures are saved wherever you choose when you save them.
+
+
+Updating or removing it
+-----------------------
+
+To update, replace the app with the new version (your settings stay where they are). To remove it, move
+the app to the Trash; delete the folder above too if you want your settings gone.
+
+
+Reporting a problem
+-------------------
+
+Open an issue at https://github.com/BrandonHilde/{{APP}}/issues and include:
+
+  - your macOS version and Mac model (Apple menu > About This Mac),
+  - the version from Help > About in the app (it looks like "{{VERSION}} (1a2b3c4)"),
+  - what you did, what you expected, and what happened instead (a screenshot helps),
+  - if it's about pictures not looking right or crashes, the output of the self test, from Terminal:
+        "/Applications/{{NAME}}.app/Contents/MacOS/{{APP}}" --selftest
