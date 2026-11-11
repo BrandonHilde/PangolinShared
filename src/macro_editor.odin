@@ -33,6 +33,7 @@ ME_SEARCH_ROWS :: 14
 ME_LABEL_W :: 0 // widgets show their own label
 ME_CURVE_ROWS :: 7 // rows a curve takes on its node
 ME_SCROLL_W :: 6 // the side panel's scroll bar
+ME_LINE_H :: 14 // a line of text on a node (the Start node's "Where this applies")
 
 Me_Drag :: enum {
 	None,
@@ -258,7 +259,22 @@ node_rows :: proc(n: ^Macro_Node, def: ^Macro_Def) -> []Me_Row {
 node_h :: proc(n: ^Macro_Node, def: ^Macro_Def) -> f32 {
 	rows := node_rows(n, def)
 	units := len(rows) > 0 ? rows[len(rows) - 1].top + rows[len(rows) - 1].units : 0
-	return ME_HEAD_H + f32(units) * ME_ROW_H + (units > 0 ? 6 : 0)
+	h := ME_HEAD_H + f32(units) * ME_ROW_H + (units > 0 ? 6 : 0)
+	if places := start_places(def); len(places) > 0 do h += f32(len(places) + 1) * ME_LINE_H + 6
+	return h
+}
+
+// Where the macro can be used, as its Start node lists them under its settings: they follow the Trigger.
+// Only in an app whose macros have triggers (the others can't run macros yet).
+@(private = "file")
+start_places :: proc(def: ^Macro_Def) -> []string {
+	HOTKEY :: [?]string{"- A tool group (its + button, Macros)", "- The Macros menu", "- Macros > Manage Macros"}
+	LAYER :: [?]string{"- A layer, as a layer effect:", "  Layer > Layer Effects"}
+	@(static) hotkey := HOTKEY
+	@(static) layer := LAYER
+	if def == nil || def.kind != .Start || !macro_layer_effects || me.m == nil do return nil
+	t, _ := macro_trigger(me.m)
+	return t == .Hotkey ? hotkey[:] : layer[:]
 }
 
 // The node's box on screen.
@@ -972,7 +988,18 @@ me_node :: proc(n: ^Macro_Node) {
 		draw_text(b.x + b.w - 14 * z - text_width(ts, fs), b.y + (ME_HEAD_H * z - text_cap(fs)) / 2, ts, with_alpha(WHITE, 150), fs)
 	}
 	if def != nil {
-		for row in node_rows(n, def) do me_row(n, def, &def.settings[row.si], row.si, row, b, fs)
+		rows := node_rows(n, def)
+		for row in rows do me_row(n, def, &def.settings[row.si], row.si, row, b, fs)
+		if places := start_places(def); len(places) > 0 && fs >= 7 {
+			units := len(rows) > 0 ? rows[len(rows) - 1].top + rows[len(rows) - 1].units : 0
+			y := b.y + (ME_HEAD_H + f32(units) * ME_ROW_H + 6) * z
+			x := b.x + 10 * z
+			hline(i32(x), i32(y - 3 * z), i32(b.w - 20 * z), C_RING)
+			draw_text(x, y + (ME_LINE_H * z - text_cap(fs)) / 2, "Where this applies:", C_TEXT_DIM, fs)
+			for p, i in places {
+				draw_text(x, y + (f32(i + 1) * ME_LINE_H * z) + (ME_LINE_H * z - text_cap(fs)) / 2, p, C_TEXT, fs)
+			}
+		}
 	}
 	clip_end()
 	if def != nil {
@@ -999,8 +1026,15 @@ me_node :: proc(n: ^Macro_Node) {
 		}
 	}
 	if ui.layer == ui.input_layer && in_rect(Rect{i32(b.x), i32(b.y), i32(b.w), i32(ME_HEAD_H * z)}, ui.mx, ui.my) && def != nil {
-		tooltip_hover(make_id({}, fmt.tprintf("menode%d", n.id)), {def.name, def.help})
+		tooltip_hover(make_id({}, fmt.tprintf("menode%d", n.id)), {def.name, me_node_help(def)})
 	}
+}
+
+// A node's description. The Start node's follows its Trigger, and says where the macro can be added.
+@(private = "file")
+me_node_help :: proc(def: ^Macro_Def) -> string {
+	if def.kind != .Start || !macro_layer_effects do return def.help
+	return macro_start_help(macro_trigger(me.m))
 }
 
 // One setting of a node: its widget at 100%, else its value as text; a wired setting shows where it comes from.
@@ -1089,7 +1123,10 @@ setting_widget :: proc(n: ^Macro_Node, s: ^Macro_Setting, i: int, r: Rect, v: Ma
 	case .Choice:
 		lw := text_w(s.name) + 8
 		text(r.x, r.y + (r.h - FONT_CAP) / 2, s.name, C_TEXT_DIM)
-		if nv, ch := combo(Rect{r.x + lw, r.y, r.w - lw, r.h}, s.choices, int(v.num), tip); ch do set(n, s, {num = f64(nv)})
+		// with help for each choice, the closed combo tells what the picked one does
+		cur := int(v.num)
+		ctip := cur >= 0 && cur < len(s.choice_help) ? Tip{s.name, s.choice_help[cur]} : tip
+		if nv, ch := combo(Rect{r.x + lw, r.y, r.w - lw, r.h}, s.choices, cur, ctip, item_tips = s.choice_help); ch do set(n, s, {num = f64(nv)})
 	case .Color:
 		lw := text_w(s.name) + 8
 		text(r.x, r.y + (r.h - FONT_CAP) / 2, s.name, C_TEXT_DIM)
@@ -1547,7 +1584,7 @@ me_side :: proc(r: Rect) {
 	text(props.x, y, def.name, WHITE)
 	text(props.x + props.w - text_w(def.category), y, def.category, C_TEXT_OFF)
 	y += 16
-	for line in tooltip_wrap(def.help, props.w, text_w) {
+	for line in tooltip_wrap(me_node_help(def), props.w, text_w) {
 		text(props.x, y, line, C_TEXT_DIM)
 		y += 13
 	}

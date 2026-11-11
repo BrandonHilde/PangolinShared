@@ -62,6 +62,7 @@ Macro_Setting :: struct {
 	curve:   f32, // a Number's slider gives more room to small values the higher this is (0 or 1: even)
 	suffix:  string,
 	choices: []string,
+	choice_help: []string, // Choice: what each choice does, the tooltip of its item in the list (constants)
 	def:     Macro_Value,
 	help:    string,
 	browse:  bool, // Text: a file path, with a button that picks it in a save window
@@ -84,6 +85,13 @@ Macro_Trigger :: enum u8 {
 }
 
 MACRO_TRIGGER_NAMES := [?]string{"On Hotkey", "On Paint", "After a Pause", "Every N Seconds", "On Demand"}
+MACRO_TRIGGER_HELP := [?]string {
+	"Runs when you run it: from a tool group, the Macros menu, or Macros > Manage Macros. One undo takes it all back.",
+	"A layer effect: runs after every change to the layer it's on. Add it to a layer in Layer > Layer Effects.",
+	"A layer effect: runs once the layer has been left alone for Seconds. Good for heavy macros. Add it to a layer in Layer > Layer Effects.",
+	"A layer effect: runs at most once every Seconds while the layer keeps changing. Add it to a layer in Layer > Layer Effects.",
+	"A layer effect: runs when it's added, when you stop painting on the layer, and when you click the circling arrow by the layer's fx. Good for heavy macros. Add it to a layer in Layer > Layer Effects.",
+}
 MACRO_TRIGGER_SECONDS :: 2 // Seconds' default
 MACRO_TRIGGER_MIN_SECONDS :: 0.2 // never 0: a timed trigger always waits a little
 
@@ -393,7 +401,7 @@ macro_shared_defs :: proc() -> []Macro_Def {
 	START_HELP :: "Where the macro begins: its Document wire leads through the steps, in order. Each macro has one."
 	if macro_layer_effects {
 		shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = START_HELP + " Its Trigger sets when the macro runs."},
-			{key = "trigger", name = "Trigger", type = .Choice, choices = MACRO_TRIGGER_NAMES[:], no_wire = true, help = "When the macro runs. On Hotkey: when you run it, from a tool group's key, the Macros menu or the Macros window. The others make it a live layer effect, which runs on the layers it's added to: On Paint after every change to the layer, After a Pause once you've left the layer alone for Seconds, Every N Seconds at most once every Seconds while the layer keeps changing, On Demand when it's added, once when you stop painting on the layer (a moment after the pen lifts, if no new stroke starts), and when you click the circling arrow by the layer's fx (or Refresh in Layer Effects). A heavy macro is best After a Pause or On Demand, so painting doesn't lag."},
+			{key = "trigger", name = "Trigger", type = .Choice, choices = MACRO_TRIGGER_NAMES[:], choice_help = MACRO_TRIGGER_HELP[:], no_wire = true, help = "When the macro runs, which also decides where it can be added. Open the list and point at a choice to see what it does."},
 			{key = "seconds", name = "Seconds", type = .Number, lo = MACRO_TRIGGER_MIN_SECONDS, hi = 600, step = 0.1, curve = 3, suffix = " s", def = {num = MACRO_TRIGGER_SECONDS}, no_wire = true, only = "trigger=After a Pause|Every N Seconds", help = "After a Pause: how long the layer has to be left alone. Every N Seconds: the shortest time between two runs."})
 	} else {
 		shared_def({id = MACRO_START, name = "Start", category = "Flow", kind = .Start, help = START_HELP})
@@ -846,6 +854,26 @@ macro_trigger_words :: proc(t: Macro_Trigger, s: f64) -> string {
 		return fmt.tprintf("Every %s s", macro_num_text(s))
 	}
 	return MACRO_TRIGGER_NAMES[t]
+}
+
+// The Start node's description for its Trigger: when the macro runs, then where it can be added.
+macro_start_help :: proc(t: Macro_Trigger, s: f64) -> string {
+	BEGIN :: "Where the macro begins: its Document wire leads through the steps, in order."
+	HOTKEY_PLACES :: "\nAdd it to:\n- A tool group: the group's + button, then Macros. Clicking the group or pressing its key runs it.\n- The Macros menu, which lists it already.\n- Macros > Manage Macros, where its Run button runs it."
+	LAYER_PLACES :: "\nAdd it to:\n- A layer: Layer > Layer Effects, or right-click the layer, then Layer Effects.\nTool groups and the Macros menu don't offer it: set the Trigger to On Hotkey for those."
+	switch t {
+	case .Hotkey:
+		return BEGIN + " On Hotkey: it runs when you run it, as one undo step.\n" + HOTKEY_PLACES
+	case .Paint:
+		return BEGIN + " On Paint: a live layer effect that runs after every change to the layer it's on.\n" + LAYER_PLACES
+	case .Pause:
+		return fmt.tprintf("%s After a Pause: a live layer effect that runs once the layer it's on has been left alone for %s s.\n%s", BEGIN, macro_num_text(s), LAYER_PLACES)
+	case .Timer:
+		return fmt.tprintf("%s Every N Seconds: a live layer effect that runs at most once every %s s while the layer it's on keeps changing.\n%s", BEGIN, macro_num_text(s), LAYER_PLACES)
+	case .Demand:
+		return BEGIN + " On Demand: a live layer effect that runs when it's added, once you stop painting on the layer, and when you click the circling arrow by the layer's fx.\n" + LAYER_PLACES
+	}
+	return BEGIN
 }
 
 // Is `m` a live layer effect rather than run by the user?

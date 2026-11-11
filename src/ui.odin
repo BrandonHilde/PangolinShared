@@ -1331,8 +1331,9 @@ popup_run_grid :: proc() {
 }
 
 // Drop-down selector. Returns the newly picked index (one frame after the click).
-// `shown`, when given, is shown in place of the current item's text.
-combo :: proc(r: Rect, items: []string, cur: int, tip: Tip, shown := "") -> (new_val: int, changed: bool) {
+// `shown`, when given, is shown in place of the current item's text. `item_tips` (constants), when given, are the
+// items' own tooltips in the list; otherwise each item has the combo's.
+combo :: proc(r: Rect, items: []string, cur: int, tip: Tip, shown := "", item_tips: []string = nil) -> (new_val: int, changed: bool) {
 	id := make_id(r, "combo")
 	clicked, held, hover := button_behavior(id, r, tip)
 	fg := ctl_state(r, hover, held || popup.open && popup.owner == id, false, true)
@@ -1371,7 +1372,7 @@ combo :: proc(r: Rect, items: []string, cur: int, tip: Tip, shown := "") -> (new
 	if clicked {
 		popup_begin(id, r, r.w)
 		for it, i in items {
-			popup_item(it, i, checked = i == cur, tip = tip.desc)
+			popup_item(it, i, checked = i == cur, tip = i < len(item_tips) ? item_tips[i] : tip.desc)
 		}
 	}
 	return
@@ -1396,18 +1397,25 @@ TIP_LINE_H :: 13
 TIP_DESC_GAP :: 6 // between the title and the description
 
 // Breaks text at spaces into lines no wider than `max_w`. A single word wider than that stays whole.
+// A line break in the text starts a new line.
 tooltip_wrap :: proc(s: string, max_w: i32, measure: proc(_: string) -> i32) -> []string {
 	lines := make([dynamic]string, context.temp_allocator)
-	start, last_space := 0, -1
-	for i := 0; i <= len(s); i += 1 {
-		if i < len(s) && s[i] != ' ' do continue
-		if measure(s[start:i]) > max_w && last_space > start {
-			append(&lines, s[start:last_space])
-			start = last_space + 1
+	para_start := 0
+	for p := 0; p <= len(s); p += 1 {
+		if p < len(s) && s[p] != '\n' do continue
+		para := s[para_start:p]
+		start, last_space := 0, -1
+		for i := 0; i <= len(para); i += 1 {
+			if i < len(para) && para[i] != ' ' do continue
+			if measure(para[start:i]) > max_w && last_space > start {
+				append(&lines, para[start:last_space])
+				start = last_space + 1
+			}
+			last_space = i
 		}
-		last_space = i
+		if start < len(para) || len(para) == 0 && p < len(s) do append(&lines, para[start:])
+		para_start = p + 1
 	}
-	if start < len(s) do append(&lines, s[start:])
 	return lines[:]
 }
 
