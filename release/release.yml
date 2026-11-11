@@ -1,0 +1,201 @@
+# Builds the app for Windows, Linux and macOS and puts the three bundles in a DRAFT GitHub release.
+# The same file is in each app's repo (.github/workflows/release.yml); this copy is the original
+# (PangolinShared/release/release.yml).
+#
+#   git tag v0.9.0-beta && git push origin v0.9.0-beta   build, and make the draft release
+#   Actions > Release > Run workflow                      build only: the bundles are on the run's page
+#
+# A draft is seen only by the repo's owner and collaborators: download the bundles from it on each computer,
+# try them, then press Publish on GitHub. The tag must match APP_VERSION in src/brand.odin.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  APP: ${{ github.event.repository.name }}
+  ODIN_RELEASE: dev-2026-10 # the Odin the apps are made with (commit 84bc3fc)
+  SDL3_TAG: release-3.4.8 # bundled with the Linux and macOS builds; Windows uses the SDL3.dll that comes with Odin
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Read APP_VERSION
+        run: |
+          v="$(sed -n 's/^APP_VERSION :: "\(.*\)".*/\1/p' src/brand.odin)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$v" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match APP_VERSION $v in src/brand.odin (expected v$v)"
+            exit 1
+          fi
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Odin
+        shell: bash
+        run: |
+          curl -fsSL -o odin.zip "https://github.com/odin-lang/Odin/releases/download/$ODIN_RELEASE/odin-windows-amd64-$ODIN_RELEASE.zip"
+          7z x odin.zip -o"$RUNNER_TEMP/odin" > /dev/null
+          dir="$(dirname "$(find "$RUNNER_TEMP/odin" -name odin.exe | head -1)")"
+          cygpath -w "$dir" >> "$GITHUB_PATH"
+      - name: Build
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          odin version
+          call build.bat
+      - name: Package
+        shell: bash
+        run: sh libs/shared/release/package.sh windows
+      - name: Self test
+        shell: bash
+        run: |
+          cd "dist/$APP-$VERSION-windows"
+          "./$APP-console.exe" --selftest
+          "./$APP-console.exe" --version
+      - name: Zip
+        shell: bash
+        run: cd dist && 7z a "../$APP-$VERSION-windows.zip" "$APP-$VERSION-windows" > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ${{ env.APP }}-${{ env.VERSION }}-windows.zip
+
+  linux:
+    needs: version
+    # the oldest supported runner: its glibc (2.35) is the oldest the build runs on
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install build tools and SDL's dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config xvfb \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libx11-dev libxext-dev libxrandr-dev \
+            libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev \
+            libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev \
+            libudev-dev libwayland-dev libdecor-0-dev
+      - name: Install Odin
+        run: |
+          curl -fsSL -o odin.tar.gz "https://github.com/odin-lang/Odin/releases/download/$ODIN_RELEASE/odin-linux-amd64-$ODIN_RELEASE.tar.gz"
+          mkdir -p "$RUNNER_TEMP/odin"
+          tar xzf odin.tar.gz -C "$RUNNER_TEMP/odin"
+          dirname "$(find "$RUNNER_TEMP/odin" -name odin -type f -perm -u+x | head -1)" >> "$GITHUB_PATH"
+      - name: Build SDL3
+        run: |
+          git clone --depth 1 --branch "$SDL3_TAG" https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/SDL"
+          cmake -S "$RUNNER_TEMP/SDL" -B "$RUNNER_TEMP/SDL/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl3" -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_STATIC=OFF
+          cmake --build "$RUNNER_TEMP/SDL/build"
+          cmake --install "$RUNNER_TEMP/SDL/build"
+      - name: Build
+        run: |
+          odin version
+          SDL3_PREFIX="$RUNNER_TEMP/sdl3" sh build.sh
+      - name: Package
+        run: SDL3_LIB="$RUNNER_TEMP/sdl3/lib/libSDL3.so.0" sh libs/shared/release/package.sh linux
+      - name: Self test (with the bundled SDL3)
+        run: |
+          cd "dist/$APP-$VERSION-linux"
+          ldd "./$APP" | grep -q "$(pwd)/libSDL3.so.0" || { echo "::error::the program doesn't load the bundled libSDL3"; ldd "./$APP"; exit 1; }
+          xvfb-run -a "./$APP" --selftest
+          "./$APP" --version
+      - name: Archive
+        run: tar czf "$APP-$VERSION-linux.tar.gz" -C dist "$APP-$VERSION-linux"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: ${{ env.APP }}-${{ env.VERSION }}-linux.tar.gz
+
+  macos:
+    needs: version
+    runs-on: macos-14 # Apple silicon
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Odin
+        run: |
+          curl -fsSL -o odin.tar.gz "https://github.com/odin-lang/Odin/releases/download/$ODIN_RELEASE/odin-macos-arm64-$ODIN_RELEASE.tar.gz"
+          mkdir -p "$RUNNER_TEMP/odin"
+          tar xzf odin.tar.gz -C "$RUNNER_TEMP/odin"
+          dirname "$(find "$RUNNER_TEMP/odin" -name odin -type f -perm -u+x | head -1)" >> "$GITHUB_PATH"
+      - name: Build SDL3
+        run: |
+          brew list cmake > /dev/null 2>&1 || brew install cmake
+          git clone --depth 1 --branch "$SDL3_TAG" https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/SDL"
+          cmake -S "$RUNNER_TEMP/SDL" -B "$RUNNER_TEMP/SDL/build" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl3" -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_STATIC=OFF
+          cmake --build "$RUNNER_TEMP/SDL/build" -j 4
+          cmake --install "$RUNNER_TEMP/SDL/build"
+      - name: Build
+        run: |
+          odin version
+          SDL3_PREFIX="$RUNNER_TEMP/sdl3" sh build.sh
+      - name: Package
+        run: SDL3_LIB="$RUNNER_TEMP/sdl3/lib/libSDL3.0.dylib" sh libs/shared/release/package.sh macos
+      - name: Self test (inside the app)
+        run: |
+          name="$(sed -n 's/^APP_NAME :: "\(.*\)".*/\1/p' src/brand.odin)"
+          exe="dist/$APP-$VERSION-macos/$name.app/Contents/MacOS/$APP"
+          otool -L "$exe"
+          codesign --verify --deep --strict "dist/$APP-$VERSION-macos/$name.app"
+          # SDL3 must come from inside the app, not the build folder
+          mv "$RUNNER_TEMP/sdl3" "$RUNNER_TEMP/sdl3-hidden"
+          "$exe" --selftest
+          "$exe" --version
+      - name: Zip
+        # ditto keeps the app's symlinks, permissions and signature intact
+        run: ditto -c -k --keepParent "dist/$APP-$VERSION-macos" "$APP-$VERSION-macos.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: ${{ env.APP }}-${{ env.VERSION }}-macos.zip
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, windows, linux, macos]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+      - name: Draft release
+        run: |
+          name="$(sed -n 's/^APP_NAME :: "\(.*\)".*/\1/p' src/brand.odin)"
+          ls -la bundles
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" bundles/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" bundles/* --draft --prerelease --generate-notes \
+              --title "$name $VERSION"
+          fi

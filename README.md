@@ -9,5 +9,11 @@ are ignored by git: change the code here, commit, then update the submodule in e
 
 Everything here is `package pangolin` and can call what each app defines (`Cmd`, `cmd_help`, `Icon`, `dialog_close`, ...).
 
+## Releases
+`release/` holds what the apps' release builds share: `package.sh` lays out a ready-to-run folder for Windows,
+Linux or macOS (run from an app's folder after building), `INSTALL-*.txt` are the guides that go in it, and
+`release.yml` is the GitHub Actions workflow each app has as `.github/workflows/release.yml` (a tag such as
+`v0.9.0-beta` builds all three and makes a draft release). Change `release.yml` here, then copy it into each app.
+
 ## License
 BSD 3-Clause. See [LICENSE](LICENSE).
