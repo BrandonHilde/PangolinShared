@@ -131,21 +131,22 @@ def light_of(name, g):
 # The drawing --------------------------------------------------------------------------------------------------
 
 # the line of action, from the neck over the dome of the back, down the rump and along the tail
-BODY = Part([(182, 100, 22), (156, 88, 42), (120, 90, 52), (84, 112, 54), (58, 148, 41), (38, 184, 28), (28, 214, 18), (36, 236, 11), (60, 247, 6), (90, 249, 1.5)])
+BODY = Part([(182, 100, 22), (156, 88, 42), (120, 90, 52), (84, 112, 54), (58, 148, 42), (40, 184, 31), (32, 214, 22), (42, 236, 14), (62, 245, 8), (84, 247, 2.5)])
 # the same line carried on along the head, from the snout back to the neck
 HEAD_TOP = Part([(230, 130, 2.5), (214, 115, 8), (196, 102, 14), (176, 90, 20)])
 NEAR_ARM = Part([(148, 124, 14), (158, 146, 12.5), (172, 164, 10.5), (184, 174, 9)])
-FAR_ARM = Part([(190, 132, 8), (204, 150, 8), (210, 166, 7), (210, 176, 6)])
-NEAR_LEG = Part([(92, 150, 25), (92, 184, 16), (96, 216, 11.5), (102, 238, 10)])
-FAR_LEG = Part([(130, 150, 16), (136, 184, 11), (134, 216, 9), (138, 238, 8)])
+FAR_ARM = Part([(185, 133, 8), (198, 151, 8), (204, 166, 7), (204, 176, 6)])
+NEAR_LEG = Part([(96, 150, 25), (100, 184, 16), (106, 216, 11.5), (112, 238, 10)])
+FAR_LEG = Part([(134, 150, 16), (142, 184, 11), (142, 216, 9), (146, 238, 8)])
 
 HEAD_SKIN = ('M164 88 C186 86 208 104 224 120 C233 129 244 136 245 143 C246 150 238 153 230 151 '
              'C214 147 200 148 184 148 C164 148 150 120 164 88 Z')
-EYE = (207, 126, 3.8)
-EAR = (186, 126, 3.2)
+EYE = (207, 126, 4.3)
+EAR = (178, 129, 4.6)
+MOUTH = 'M238 149.2 C230 149 222 148.4 215 145.6'
 NOSE = (240.5, 145, 4.2)
 NEAR_PAW = 'M172 164 C182 160 196 166 196 178 C196 186 186 190 176 188 C168 186 164 172 172 164 Z'
-FAR_PAW = 'M202 166 C210 162 220 168 219 178 C218 185 208 188 202 184 C196 180 196 170 202 166 Z'
+FAR_PAW = 'M196 166 C204 162 214 168 213 178 C212 185 202 188 196 184 C190 180 190 170 196 166 Z'
 
 def claw(x, y, dx, dy, width, bend):
     """A long sickle of a claw from (x, y), reaching by (dx, dy), its back curved by `bend`."""
@@ -162,10 +163,10 @@ def claw(x, y, dx, dy, width, bend):
 
 def near_claws():
     # thick at the root and hooked back towards the body, ready to dig
-    return [claw(174, 182, -10, 36, 12, -13), claw(183, 184, -10, 40, 13, -14), claw(192, 180, -8, 38, 12, -13)]
+    return [claw(174, 182, -8, 27, 10.5, -10), claw(183, 184, -8, 31, 11.5, -11), claw(192, 180, -6, 29, 10.5, -10)]
 
 def far_claws():
-    return [claw(204, 180, -8, 30, 9, -9), claw(212, 178, -8, 32, 9, -10)]
+    return [claw(199, 180, -6, 23, 8, -7), claw(207, 178, -6, 25, 8, -8)]
 
 def foot(x, y, far=False):
     """A hind foot: a low pad with short claws."""
@@ -174,16 +175,29 @@ def foot(x, y, far=False):
     cl = [claw(x + d * k, y - 3, 11 * k, 3, 5, 2) for d in (9, 15, 21)]
     return pad, cl
 
+def ear_svg(x, y, r, flap, hollow, line, line_w):
+    """The ear: a small flap lying back along the head, with a shallow hollow. It is kept close to the skin in
+    value, so that it is not taken for a second eye."""
+    return (f'<g transform="rotate(-32 {x} {y})"><ellipse cx="{x}" cy="{y}" rx="{r}" ry="{r * .72:.2f}" fill="{flap}" stroke="{line}" stroke-opacity=".6" stroke-width="{line_w}"/>'
+            f'<path d="M{x - r * .55:.2f} {y + r * .12:.2f} Q{x:.2f} {y - r * .42:.2f} {x + r * .5:.2f} {y + r * .05:.2f}" fill="none" stroke="{hollow}" stroke-width="{r * .3:.2f}" stroke-linecap="round"/></g>')
+
+# where the animal's weight meets the ground, as (cx, cy, rx, ry)
+GROUND = (120, 249, 104, 8)
+
 def poly(pts):
     return 'M' + ' L'.join(f'{x:.1f} {y:.1f}' for x, y in pts) + ' Z'
 
+def is_limb(d):
+    """True for the shape of a whole arm or leg, which lies under its scales: those are the only polygons."""
+    return ' L' in d
+
 # how the amount of detail changes with the size the icon is shown at: 0 for 96 and up, 1 for 48 and 64
 DETAIL = {0: dict(L=38, W=36, step=21, arm=(15, 14, 8.5), leg=(18, 17, 10), head=(11, 8, 6)),
-          1: dict(L=58, W=56, step=33, arm=(26, 24, 15), leg=(30, 30, 17), head=(26, 20, 14))}
+          1: dict(L=47, W=44, step=27, arm=(22, 20, 13), leg=(26, 25, 15), head=(20, 15, 11))}
 
 def layers(detail=0):
     """The drawing as (role, data) from back to front. Roles: under, skin, skin_far, scale, scale_far, claw, claw_far,
-    eye, ear, nose. A scale's data is (part name, s, v, geometry, how far along the part 0-1, its light)."""
+    eye, ear, nose, mouth. A scale's data is (part name, s, v, geometry, how far along the part 0-1, its light)."""
     D = DETAIL[detail]
     o = []
     def add_scales(name, part, role, **kw):
@@ -193,12 +207,12 @@ def layers(detail=0):
     ll, lw, lst = D['leg']
     # the far leg, then the near one
     o.append(('skin_far', poly(FAR_LEG.outline())))
-    pad, cl = foot(138, 244, True)
+    pad, cl = foot(146, 244, True)
     o.append(('skin_far', pad))
     o += [('claw_far', d) for d in cl]
     add_scales('far_leg', FAR_LEG, 'scale_far', L=ll * .9, W=lw * .9, step=lst, under=.9, ref=14, fmin=.65, end=8)
     o.append(('skin', poly(NEAR_LEG.outline())))
-    pad, cl = foot(102, 246)
+    pad, cl = foot(112, 246)
     o.append(('skin', pad))
     o += [('claw', d) for d in cl]
     add_scales('near_leg', NEAR_LEG, 'scale', L=ll, W=lw, step=lst, under=.9, ref=18, fmin=.65, end=9)
@@ -214,6 +228,7 @@ def layers(detail=0):
     o.append(('ear', EAR))
     o.append(('eye', EYE))
     o.append(('nose', NOSE))
+    o.append(('mouth', MOUTH))
     hl, hw, hst = D['head']
     add_scales('head', HEAD_TOP, 'scale', L=hl, W=hw, step=hst, under=.42, ref=12, fmin=.55, start=14, end=1)
     o.append(('skin', poly(NEAR_ARM.outline())))

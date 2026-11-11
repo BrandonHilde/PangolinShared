@@ -1,15 +1,15 @@
 """The three styles, all from the one anatomy in anatomy.py, and all lit by its one light."""
-import math, os, random, re, subprocess, sys
+import math, os, random, re, shutil, subprocess, sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
-from anatomy import layers, shield, facet, ribs, HEAD_SKIN, NEAR_PAW, FAR_PAW
-from sprite32 import SPRITE_32
+import pack
+from anatomy import layers, shield, facet, ribs, ear_svg, is_limb, HEAD_SKIN, NEAR_PAW, FAR_PAW, GROUND
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'out')
 os.makedirs(OUT, exist_ok=True)
 CHROME = r'C:/Program Files/Google/Chrome/Application/chrome.exe'
-FIT, FX, FY = .94, 8, 6
+FIT, FX, FY = .9, 13, 6
 TILE_TOP, TILE_BOTTOM = '#2b2e38', '#14151b'
 
 def rgb(h):
@@ -27,25 +27,38 @@ def ramp_at(ramp, t):
     return lerp(ramp[i], ramp[i + 1], t - i)
 
 def render(svg_text, name, size):
-    """Draws an SVG with a real browser. Returns the image, with its alpha."""
+    """Draws an SVG at `size` pixels and returns the image, with its alpha: with Chrome where it is installed, and
+    otherwise with ImageMagick (librsvg)."""
     p = os.path.join(OUT, name + '.svg')
     with open(p, 'w') as f:
         f.write(svg_text)
-    html = os.path.join(OUT, '_r.html')
-    with open(html, 'w') as f:
-        f.write(f'<!doctype html><body style="margin:0;background:transparent"><img src="{name}.svg" width="{size}" height="{size}" style="display:block"></body>')
     png = os.path.join(OUT, '_r.png').replace(os.sep, '/')
-    subprocess.run([CHROME, '--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1', '--default-background-color=00000000', f'--screenshot={png}', f'--window-size={size},{size}', 'file:///' + html.replace(os.sep, '/')], capture_output=True, timeout=90)
+    if os.path.exists(CHROME):
+        html = os.path.join(OUT, '_r.html')
+        with open(html, 'w') as f:
+            f.write(f'<!doctype html><body style="margin:0;background:transparent"><img src="{name}.svg" width="{size}" height="{size}" style="display:block"></body>')
+        subprocess.run([CHROME, '--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1', '--default-background-color=00000000', f'--screenshot={png}', f'--window-size={size},{size}', 'file:///' + html.replace(os.sep, '/')], capture_output=True, timeout=90)
+    else:
+        # the drawings are 256 units wide, and an SVG unit is 1/96 inch
+        subprocess.run(['magick', '-background', 'none', '-density', f'{96 * size / 256:g}', p, '-resize', f'{size}x{size}!', 'PNG32:' + png], check=True, capture_output=True, timeout=90)
     return Image.open(png).convert('RGBA').copy()
 
 def tile(accent):
     return f'''<defs>
 <linearGradient id="t" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="256"><stop offset="0" stop-color="{TILE_TOP}"/><stop offset="1" stop-color="{TILE_BOTTOM}"/></linearGradient>
 <radialGradient id="g" gradientUnits="userSpaceOnUse" cx="128" cy="96" r="136"><stop offset="0" stop-color="{accent}" stop-opacity=".26"/><stop offset="1" stop-color="{accent}" stop-opacity="0"/></radialGradient>
+<linearGradient id="rim" gradientUnits="userSpaceOnUse" x1="0" y1="6" x2="0" y2="120"><stop offset="0" stop-color="#ffffff" stop-opacity=".15"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+<radialGradient id="gr"><stop offset="0" stop-color="#000000" stop-opacity=".6"/><stop offset=".6" stop-color="#000000" stop-opacity=".34"/><stop offset="1" stop-color="#000000" stop-opacity="0"/></radialGradient>
 </defs>
 <rect x="6" y="6" width="244" height="244" rx="54" fill="url(#t)"/>
 <rect x="6" y="6" width="244" height="244" rx="54" fill="url(#g)"/>
+<rect x="7" y="7" width="242" height="242" rx="53" fill="none" stroke="url(#rim)" stroke-width="2"/>
 '''
+
+def ground():
+    """The shadow the animal stands on. It goes inside the drawing's own transform, under everything else."""
+    cx, cy, rx, ry = GROUND
+    return f'<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="url(#gr)"/>'
 
 def svg(inner, backdrop=''):
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">\n' + backdrop +
@@ -58,8 +71,8 @@ TEAL = [rgb(x) for x in ('#0d4a59', '#127a7e', '#2aa79c', '#62d3bf', '#a4f0dc')]
 LINE = '#08262e'
 
 def scales_art(detail=0, handles=True):
-    o = []
-    line_w = 1.7 if detail == 0 else 3.0
+    o = [ground()]
+    line_w = 1.7 if detail == 0 else 3.4
     for role, d in layers(detail):
         if role in ('scale', 'scale_far'):
             name, s, v, g, along, light = d
@@ -74,27 +87,35 @@ def scales_art(detail=0, handles=True):
                 o.append(f'<path d="{facet(g, up)}" fill="{hexc(ramp_at(TEAL, light * .86 + .24))}"/>')
         elif role == 'under':
             o.append(f'<path d="{d}" fill="#0a3640"/>')
+        elif role in ('skin', 'skin_far') and is_limb(d):
+            # dark under the scales of a limb, so that no pale skin shows in the gaps between them
+            o.append(f'<path d="{d}" fill="{'#0a3640' if role == 'skin' else '#072a33'}" stroke="{LINE}" stroke-width="{line_w}"/>')
         elif role == 'skin':
-            o.append(f'<path d="{d}" fill="#dcefe9" stroke="{LINE}" stroke-width="{line_w}"/>')
+            # only the face is the palest thing in the drawing; the paws and feet are a step down from it
+            o.append(f'<path d="{d}" fill="{'#dcefe9' if d is HEAD_SKIN else '#b3d2cd'}" stroke="{LINE}" stroke-width="{line_w}"/>')
             if d is HEAD_SKIN:
                 # the shadow under the jaw
                 o.append('<path d="M172 136 C192 138 214 140 232 146 C236 149 234 152 230 151 C214 147 200 148 184 148 C176 148 170 144 172 136 Z" fill="#a4c7c4"/>')
         elif role == 'skin_far':
             o.append(f'<path d="{d}" fill="#6c908e" stroke="{LINE}" stroke-width="{line_w}"/>')
         elif role == 'claw':
-            o.append(f'<path d="{d}" fill="#f6fdfa" stroke="{LINE}" stroke-width="{line_w}"/>')
+            o.append(f'<path d="{d}" fill="#e4f3ee" stroke="{LINE}" stroke-width="{line_w}"/>')
         elif role == 'claw_far':
             o.append(f'<path d="{d}" fill="#a3c0bc" stroke="{LINE}" stroke-width="{line_w}"/>')
         elif role == 'eye':
             x, y, r = d
+            if detail:
+                r *= 1.4  # at 64 and 48 the eye has to be a whole pixel
             o.append(f'<circle cx="{x}" cy="{y}" r="{r}" fill="#061a20"/><circle cx="{x + 1.1}" cy="{y - 1.2}" r="1.1" fill="#ffffff"/>')
-        elif role == 'ear':
+        elif role == 'ear' and detail == 0:
             x, y, r = d
-            o.append(f'<circle cx="{x}" cy="{y}" r="{r}" fill="#7da3a0"/><circle cx="{x}" cy="{y}" r="{r - 1.2}" fill="#061a20"/>')
+            o.append(ear_svg(x, y, r, '#a9cbc6', '#8fb5b1', LINE, line_w * .5))
         elif role == 'nose':
             x, y, r = d
             o.append(f'<ellipse cx="{x}" cy="{y}" rx="{r}" ry="{r * .85}" fill="#061a20"/>')
-    if handles and detail == 0:
+        elif role == 'mouth' and detail == 0:
+            o.append(f'<path d="{d}" fill="none" stroke="{LINE}" stroke-opacity=".6" stroke-width="1.2" stroke-linecap="round"/>')
+    if handles:
         # one scale on the crown of the back, selected as a path, with its anchors and a bezier handle. Set clear of
         # the face, so that the eye still gets looked at first.
         body = [d for r, d in layers(detail) if r == 'scale' and d[0] == 'body']
@@ -102,7 +123,10 @@ def scales_art(detail=0, handles=True):
         cx, cy, ax, ay, bx, by, L, W = best[3]
         def P(a, b):
             return (cx + ax * a + bx * b, cy + ay * a + by * b)
-        o.append(f'<path d="{shield(best[3])}" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linejoin="round"/>')
+        # the selected scale is also lighter, which is all that is left of the selection at 64 and 48
+        o.append(f'<path d="{shield(best[3])}" fill="#ffffff" fill-opacity=".24" stroke="#ffffff" stroke-opacity="{1 if detail == 0 else .6}" stroke-width="{2.6 if detail == 0 else 3.2}" stroke-linejoin="round"/>')
+        if detail:
+            return svg(o, tile('#5fd0c0'))
         tip = P(L, 0)
         h1, h2 = P(L, W * .62), P(L, -W * .62)
         o.append(f'<path d="M{h1[0]:.1f} {h1[1]:.1f} L{h2[0]:.1f} {h2[1]:.1f}" stroke="#ffffff" stroke-width="1.8" fill="none"/>')
@@ -119,30 +143,66 @@ def scales_art(detail=0, handles=True):
 PIXEL_STYLES = {
     'pixels': dict(accent='#66a6ff', ramp=['#0c1f52', '#173c9c', '#2c6ad8', '#62a2ff', '#a9cfff', '#e7f2ff'], skin='#eef3ff', shade='#a4b4d8', far='#5a6c9c', claw='#ffffff', claw_far='#a4b4d8'),
     'scales': dict(accent='#5fd0c0', ramp=['#08303a', '#0e5c64', '#1f8f88', '#4fc4b4', '#8fe8d6', '#d6fff2'], skin='#eaf6f2', shade='#a0c4c0', far='#5a8482', claw='#ffffff', claw_far='#a0c4c0'),
-    'paints': dict(accent='#f6aa68', ramp=['#35143f', '#772a6e', '#c84a74', '#ee8052', '#fbb452', '#ffe39a'], skin='#fdeedb', shade='#cfae8e', far='#8c6e62', claw='#fff6e6', claw_far='#cfae8e'),
+    # Paints keeps the violet of its painted ground at the sizes that are pixel art
+    'paints': dict(tile=('#3b2748', '#1a1226'), accent='#f6aa68', ramp=['#35143f', '#772a6e', '#c84a74', '#ee8052', '#fbb452', '#ffe39a'], skin='#fdeedb', shade='#cfae8e', far='#8c6e62', claw='#fff6e6', claw_far='#cfae8e'),
 }
 STEPPED = {32: [6, 3, 2, 1, 1, 1], 24: [4, 2, 1, 1], 16: [2, 1]}
 
-def stepped_tile(accent, G):
+def corner_steps(G):
+    """How far each row of the tile's rounded corner is set in, from the top row down."""
+    if G in STEPPED:
+        return STEPPED[G]
+    R = round(54 * G / 256) - 1
+    out = []
+    for r in range(R):
+        inset = round(R - math.sqrt(R * R - (R - r - .5) ** 2))
+        if inset <= 0:
+            break
+        out.append(inset)
+    return out
+
+def tile_margin(G):
+    return max(1, G // 32)
+
+def stepped_tile(accent, G, top=TILE_TOP, bottom=TILE_BOTTOM):
     c = 256 / G
     rects = []
-    m = 1
-    steps = STEPPED[G]
+    m = tile_margin(G)
+    steps = corner_steps(G)
     for r, inset in enumerate(steps):
         for y in (m + r, G - 1 - m - r):
             rects.append(f'<rect x="{(m + inset) * c:g}" y="{y * c:g}" width="{(G - 2 * m - 2 * inset) * c:g}" height="{c:g}"')
     h = len(steps)
     rects.append(f'<rect x="{m * c:g}" y="{(m + h) * c:g}" width="{(G - 2 * m) * c:g}" height="{(G - 2 * m - 2 * h) * c:g}"')
     defs = f'''<defs>
-<linearGradient id="t" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="256"><stop offset="0" stop-color="{TILE_TOP}"/><stop offset="1" stop-color="{TILE_BOTTOM}"/></linearGradient>
+<linearGradient id="t" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="256"><stop offset="0" stop-color="{top}"/><stop offset="1" stop-color="{bottom}"/></linearGradient>
 <radialGradient id="g" gradientUnits="userSpaceOnUse" cx="128" cy="96" r="136"><stop offset="0" stop-color="{accent}" stop-opacity=".26"/><stop offset="1" stop-color="{accent}" stop-opacity="0"/></radialGradient>
 </defs>
 '''
     return defs + '\n'.join(r + ' fill="url(#t)"/>' for r in rects) + '\n' + '\n'.join(r + ' fill="url(#g)"/>' for r in rects) + '\n'
 
-def grid_svg(grid, accent, G):
+def tile_span(G, y):
+    """The first and last column of the tile on row y, or None outside it."""
+    m, steps = tile_margin(G), corner_steps(G)
+    r = min(y - m, G - 1 - m - y)
+    if r < 0:
+        return None
+    inset = steps[r] if r < len(steps) else 0
+    return m + inset, G - 1 - m - inset
+
+def grid_svg(grid, st, G):
+    accent = st['accent']
     c = 256 / G
     rects = []
+    # the ground shadow, on the grid: the tile's own pixels, darkened
+    cx, cy, rx, ry = GROUND[0] * FIT + FX, GROUND[1] * FIT + FY, GROUND[2] * FIT, max(GROUND[3] * FIT, c * .75)
+    for gy in range(G):
+        span = tile_span(G, gy)
+        if not span:
+            continue
+        xs = [gx for gx in range(span[0], span[1] + 1) if ((gx + .5) * c - cx) ** 2 / rx ** 2 + ((gy + .5) * c - cy) ** 2 / ry ** 2 <= 1]
+        if xs:
+            rects.append(f'<rect x="{xs[0] * c:g}" y="{gy * c:g}" width="{(xs[-1] - xs[0] + 1) * c:g}" height="{c:g}" fill="#000000" fill-opacity=".4"/>')
     for gy in range(G):
         gx = 0
         while gx < G:
@@ -155,11 +215,15 @@ def grid_svg(grid, accent, G):
                 e += 1
             rects.append(f'<rect x="{gx * c:g}" y="{gy * c:g}" width="{(e - gx + 1) * c:g}" height="{c:g}" fill="{col}"/>')
             gx = e + 1
-    return f'<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" shape-rendering="crispEdges">\n{stepped_tile(accent, G)}' + '\n'.join(rects) + '\n</svg>\n'
+    return f'<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" shape-rendering="crispEdges">\n{stepped_tile(accent, G, *st.get('tile', (TILE_TOP, TILE_BOTTOM)))}' + '\n'.join(rects) + '\n</svg>\n'
 
 # A scale on the grid, with every other row shifted by half: +1 is the edge that catches the light, -1 the shadow of
 # the scale above. Big scales, big enough to count, instead of a texture.
-SHINGLE = {32: ((0, 1, 1, 0), (0, 0, 0, 0), (-1, 0, 0, -1)), 24: ((1, 1, 0), (-1, 0, 0))}
+SHINGLE = {32: ((0, 1, 1, 0), (0, 0, 0, 0), (-1, 0, 0, -1)), 24: ((0, 1, 1, 0), (0, 0, 0, 0), (-1, 0, 0, -1)),
+           # at 64 a scale is big enough to have its own outline: two sides, a round lower edge and the light on its lip
+           64: ((-1, 0, 0, 0, 0, 0, 0, 0), (-1, 0, 0, 0, 0, 0, 0, 0), (0, -1, 0, 0, 0, 0, 0, -1), (0, 0, -1, 1, 1, 1, -1, 0), (0, 0, 0, -1, -1, -1, 0, 0), (0, 0, 0, 0, -1, 0, 0, 0))}
+# the small scales of the head and the limbs, where the big ones would not fit
+SHINGLE_FINE = {64: ((0, 1, 1, 0), (0, 0, 0, 0), (-1, 0, 0, -1))}
 DEPTH = {'far_leg': 1, 'near_leg': 2, 'body': 3, 'far_arm': 4, 'far_claw': 5, 'head_skin': 6, 'head': 7, 'near_arm': 8, 'near_claw': 9}
 
 def id_color(i):
@@ -234,10 +298,15 @@ def pixel_art(style, G):
             t = light_of_cell[gx, gy]
             step = 2 + int(min(.999, t) * 2.6)  # the shape of the light: 2 to 4 of the ramp, so shadow still reads on a dark tile
             if part in ('far_leg', 'far_arm'):
-                step = max(0, step - 2)
-            h, w = len(pat), len(pat[0])
+                step = max(1, step - 1)  # dim, but still clear of the dark tile
+            p = pat
+            if G in SHINGLE_FINE and part != 'body':
+                p = SHINGLE_FINE[G]
+                if part == 'head':
+                    step -= 2  # so the cap of scales stands apart from the pale face under it
+            h, w = len(p), len(p[0])
             row = gy // h
-            f = pat[gy % h][(gx + (w // 2 if row % 2 else 0)) % w]
+            f = p[gy % h][(gx + (w // 2 if row % 2 else 0)) % w]
             step = max(0, min(len(ramp) - 1, step + f))
             col = ramp[step]
         elif part == 'near_claw':
@@ -249,7 +318,9 @@ def pixel_art(style, G):
         else:
             col = st['far'] if part in ('far_leg', 'far_arm') else st['shade']
         if behind:
-            col = ramp[0]
+            # on a small face a dark pixel is an eye, so there the edge is only the skin's shadow
+            # and at 32 and under a black line across the body is a crack, so the edge is just a darker step
+            col = st['shade'] if part == 'head_skin' and G <= 24 else ramp[0 if G > 32 else 1]
         grid[gx, gy] = col
     # the jaw's shadow, the eye and the nose
     def cell_of(x, y):
@@ -257,33 +328,39 @@ def pixel_art(style, G):
     for (gx, gy), part in part_of.items():
         if part == 'head_skin' and part_of.get((gx, gy + 1)) != 'head_skin':
             grid[gx, gy] = st['shade']
+    big = G >= 48  # room for an eye of four pixels with a glint, and a nose of two
     for role, d in layers(0):
         if role == 'eye':
-            grid[cell_of(d[0], d[1])] = '#0c0d10'
+            ex, ey = cell_of(d[0], d[1])
+            grid[ex, ey] = '#0c0d10'
+            if big:
+                grid[ex - 1, ey] = grid[ex - 1, ey - 1] = grid[ex, ey - 1] = '#0c0d10'
         if role == 'nose':
             c = cell_of(d[0], d[1])
             if c in grid:
                 grid[c] = '#0c0d10'
-    return grid_svg(grid, st['accent'], G)
+            if big and (c[0] - 1, c[1]) in grid:
+                grid[c[0] - 1, c[1]] = '#0c0d10'
+    return grid_svg(grid, st, G)
 
 # At 16 pixels nothing automatic works: this one is drawn by hand, and each app swaps in its colors.
 # . empty, 0-5 the ramp, S skin, s its shadow, C claw, c dim claw, E the eye and nose
 SPRITE_16 = [
     '................',
     '................',
-    '.....44444......',
-    '...444444444....',
-    '..44333433333...',
-    '..333333333333..',
-    '.3323333233SSS..',
-    '.3333333333SESS.',
-    '.223233333SSSSE.',
-    '.2222222222sss..',
-    '.22.22..332.....',
-    '.22.22..33CC.C..',
-    '.11.22..1.CC.Cc.',
-    '..11.22...C..c..',
-    '...1122.........',
+    '................',
+    '.....4444.......',
+    '...4454454......',
+    '..444444443.....',
+    '..34334334SS....',
+    '..3333333SESS...',
+    '..232232233ssE..',
+    '..22222222......',
+    '..222.22.3......',
+    '..22..22.3......',
+    '..12..22........',
+    '...122SS........',
+    '................',
     '................',
 ]
 
@@ -296,13 +373,10 @@ def hand_drawn(style, rows):
             if ch == '.':
                 continue
             grid[x, y] = st['ramp'][int(ch)] if ch.isdigit() else m[ch]
-    return grid_svg(grid, st['accent'], len(rows))
+    return grid_svg(grid, st, len(rows))
 
 def pixel_16(style):
     return hand_drawn(style, SPRITE_16)
-
-def pixel_32(style):
-    return hand_drawn(style, SPRITE_32)
 
 # Pangolin Paints: painted stroke by stroke --------------------------------------------------------------------------
 
@@ -397,7 +471,7 @@ def painting(size=1024, seed=11, detail=0):
     def ground(x, y):
         d = math.hypot((x - size * .50) / size, (y - size * .32) / size)
         t = max(0, min(1, 1 - d * 1.5))
-        return lerp(rgb('#1f1a33'), rgb('#6e3a62'), t ** 1.6)
+        return lerp(rgb('#17142a'), rgb('#6e3a62'), t ** 1.6)
     for w, count in ((190, 70), (120, 110)):
         for _ in range(count):
             w2 = w * B
@@ -478,6 +552,14 @@ def painting(size=1024, seed=11, detail=0):
             bristles(draw, hd, curve(X(a), X(m), X(b), 8), w, c, rng, 3, .1)
 
     SKIN, SIENNA = rgb('#f6dcbc'), rgb('#9a5e4a')
+    # the ground under the animal: a few long dark strokes, laid before it is painted
+    gx, gy, grx, gry = GROUND
+    for i in range(7):
+        f = (i + .5) / 7
+        half = grx * (1 - .5 * abs(f * 2 - 1))
+        y = gy + gry * (f * 2 - 1) * .9
+        a, b = X((gx - half + rng.gauss(0, 4), y)), X((gx + half + rng.gauss(0, 4), y + rng.gauss(0, 1)))
+        bristles(draw, hd, curve(a, ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + rng.gauss(0, 3 * B)), b, 12), gry * S * .62, lerp(rgb('#120b1c'), rgb('#2a1838'), abs(f * 2 - 1)), rng, 3, .5)
     stage = 0
     for role, d in layers(detail):
         if role in ('scale', 'scale_far'):
@@ -507,12 +589,15 @@ def painting(size=1024, seed=11, detail=0):
             bristles(draw, hd, curve(X(root), X(M), X(tip), 10), w, lerp(base, rgb('#c07a5a'), .25), rng, 4, .98)
             bristles(draw, hd, curve(X(root), X((M[0] + (mid[0] - M[0]) * .4, M[1])), X(tip), 10), w * .45, base, rng, 3, .96)
         elif role == 'ear':
+            # two dabs lying back along the head, close to the skin in value
             x, y, r = d
-            A = X((x, y))
-            rr = r * S * FIT
-            draw.ellipse((A[0] - rr, A[1] - rr, A[0] + rr, A[1] + rr), fill=tuple(int(v) for v in lerp(SKIN, SIENNA, .85)) + (255,))
-            rr *= .55
-            draw.ellipse((A[0] - rr, A[1] - rr, A[0] + rr, A[1] + rr), fill=(24, 12, 20, 255))
+            ca, sa = math.cos(math.radians(-32)), math.sin(math.radians(-32))
+            for k, c, w in ((1, lerp(SKIN, SIENNA, .55), .9), (.45, lerp(SKIN, SIENNA, .95), .55)):
+                a, b = X((x - ca * r * k, y - sa * r * k)), X((x + ca * r * k, y + sa * r * k))
+                bristles(draw, hd, curve(a, ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 - r * S * .3), b, 6), r * S * FIT * 1.4 * w, c, rng, 3, .5)
+        elif role == 'mouth':
+            pts = [X(p) for p in flatten_path(d)]
+            draw.line(pts, fill=tuple(int(v) for v in lerp(SIENNA, PLUM, .45)) + (255,), width=max(1, round(1.3 * S)), joint='curve')
         elif role == 'nose':
             x, y, r = d
             A = X((x, y))
@@ -555,8 +640,9 @@ def main():
     small_scales = scales_art(1)
     for sz in (64, 48):
         made['scales', sz] = render(small_scales, 'scales_small', sz)
-    g32, g24, g16 = pixel_32('pixels'), pixel_art('pixels', 24), pixel_16('pixels')
-    for sz, g, nm in ((256, g32, 'g32'), (128, g32, 'g32'), (64, g32, 'g32'), (48, g24, 'g24'), (32, g32, 'g32'), (24, g24, 'g24'), (16, g16, 'g16')):
+    # Pixels is pixel art at every size: a 64 pixel drawing for the large ones, then 32, 24 and 16
+    g64, g32, g24, g16 = pixel_art('pixels', 64), pixel_art('pixels', 32), pixel_art('pixels', 24), pixel_16('pixels')
+    for sz, g, nm in ((256, g64, 'g64'), (128, g64, 'g64'), (64, g32, 'g32'), (48, g24, 'g24'), (32, g32, 'g32'), (24, g24, 'g24'), (16, g16, 'g16')):
         made['pixels', sz] = render(g, f'pixels_{nm}', sz)
     art = painting(1024)
     art.save(os.path.join(OUT, 'paints_1024.png'))
@@ -567,14 +653,30 @@ def main():
     for sz in (64, 48):
         made['paints', sz] = small_art.resize((sz, sz), Image.LANCZOS)
     for name in ('scales', 'paints'):
-        made[name, 32] = render(pixel_32(name), f'{name}_g32', 32)
+        made[name, 32] = render(pixel_art(name, 32), f'{name}_g32', 32)
         made[name, 24] = render(pixel_art(name, 24), f'{name}_g24', 24)
         made[name, 16] = render(pixel_16(name), f'{name}_g16', 16)
     for (name, sz), im in made.items():
         im.save(os.path.join(OUT, f'{name}_{sz}.png'))
+    # each app's assets/icon folder, ready to copy over it. The master is the largest drawing, in its own form.
+    masters = {'scales': ('scales.svg', 'master.svg'), 'pixels': ('pixels_g64.svg', 'master.svg'), 'paints': ('paints_1024.png', 'master_1024.png')}
     for name in ('scales', 'paints', 'pixels'):
-        frames = [made[name, sz] for sz in SIZES]
-        frames[0].save(os.path.join(OUT, f'{name}.ico'), format='ICO', sizes=[(s, s) for s in SIZES], append_images=frames[1:])
+        folder = os.path.join(OUT, name)
+        os.makedirs(folder, exist_ok=True)
+        pngs = []
+        for sz in SIZES:
+            p = os.path.join(folder, f'icon_{sz}.png')
+            made[name, sz].save(p, optimize=True)
+            with open(p, 'rb') as f:
+                pngs.append(f.read())
+        icon = pack.ico(pngs)
+        with open(os.path.join(folder, 'app.ico'), 'wb') as f:
+            f.write(icon)
+        with open(os.path.join(folder, 'app.res'), 'wb') as f:
+            f.write(pack.res(icon))
+        with open(os.path.join(folder, 'app.rc'), 'w', newline='\n') as f:
+            f.write('// The icon of the Windows executable.\n1 ICON "app.ico"\n')
+        shutil.copyfile(os.path.join(OUT, masters[name][0]), os.path.join(folder, masters[name][1]))
     proof(made)
 
 def proof(made):

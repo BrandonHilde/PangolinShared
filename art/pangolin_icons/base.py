@@ -1,6 +1,6 @@
 """The base image: the anatomy drawn plainly in natural colors, so it can be judged before any style goes on it."""
 import os, subprocess, sys
-from anatomy import layers, shield, ribs
+from anatomy import layers, shield, ribs, ear_svg, GROUND
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'out')
@@ -12,7 +12,7 @@ def mix(a, b, t):
     cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
     return '#%02x%02x%02x' % tuple(round(ca[i] + (cb[i] - ca[i]) * t) for i in range(3))
 
-def draw(fit=(.94, 8, 6)):
+def draw(fit=(.9, 13, 6)):
     out = []
     defs = []
     gid = 0
@@ -45,17 +45,23 @@ def draw(fit=(.94, 8, 6)):
             out.append(f'<circle cx="{x}" cy="{y}" r="{r + 1.5}" fill="#4a3424"/><circle cx="{x}" cy="{y}" r="{r}" fill="#0e0a08"/><circle cx="{x + 1.2}" cy="{y - 1.3}" r="1.1" fill="#ffffff"/>')
         elif role == 'ear':
             x, y, r = d
-            out.append(f'<circle cx="{x}" cy="{y}" r="{r + 1.2}" fill="#5a4332"/><circle cx="{x}" cy="{y}" r="{r - .6}" fill="#1a120c"/>')
+            out.append(ear_svg(x, y, r, '#7a5d48', '#5a4332', INK, .9))
         elif role == 'nose':
             x, y, r = d
             out.append(f'<ellipse cx="{x}" cy="{y}" rx="{r}" ry="{r * .85}" fill="#1a120c"/>')
+        elif role == 'mouth':
+            out.append(f'<path d="{d}" fill="none" stroke="{INK}" stroke-opacity=".55" stroke-width="1.1" stroke-linecap="round"/>')
     k, fx, fy = fit
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">\n'
             '<rect x="6" y="6" width="244" height="244" rx="54" fill="#c4d6e4"/>\n<defs>' + ''.join(defs) + '</defs>\n'
-            f'<g transform="translate({fx} {fy}) scale({k})">\n' + '\n'.join(out) + '\n</g>\n</svg>\n')
+            f'<g transform="translate({fx} {fy}) scale({k})">\n'
+            f'<ellipse cx="{GROUND[0]}" cy="{GROUND[1]}" rx="{GROUND[2]}" ry="{GROUND[3]}" fill="#2a1d14" fill-opacity=".22"/>\n' + '\n'.join(out) + '\n</g>\n</svg>\n')
 
 def shot(svg, png, size=512):
     chrome = r'C:/Program Files/Google/Chrome/Application/chrome.exe'
+    if not os.path.exists(chrome):
+        subprocess.run(['magick', '-background', '#3a3d46', '-density', f'{96 * size / 256:g}', svg, '-resize', f'{size}x{size}!', png], check=True, capture_output=True, timeout=60)
+        return
     html = os.path.join(OUT, '_shot.html')
     with open(html, 'w') as f:
         f.write(f'<!doctype html><body style="margin:0;background:#3a3d46"><img src="{os.path.basename(svg)}" width="{size}" height="{size}"></body>')
