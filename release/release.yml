@@ -194,6 +194,7 @@ jobs:
         with:
           path: bundles
           merge-multiple: true
+          skip-decompress: true # the bundles are the files to attach: don't unpack the .zip ones
       - name: Check the bundles
         run: |
           ls -la bundles
