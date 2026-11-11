@@ -72,7 +72,11 @@ macos)
 	old="$(otool -L "$app" | awk '/libSDL3/ {print $1; exit}')"
 	install_name_tool -id "@rpath/libSDL3.0.dylib" "$bundle/Contents/Frameworks/libSDL3.0.dylib"
 	[ -n "$old" ] && install_name_tool -change "$old" "@rpath/libSDL3.0.dylib" "$bundle/Contents/MacOS/$app"
-	install_name_tool -add_rpath "@executable_path/../Frameworks" "$bundle/Contents/MacOS/$app" 2>/dev/null || true
+	# build.sh links macOS builds with the runpath @executable_path/../Frameworks: make sure, before anyone downloads it
+	if ! otool -l "$bundle/Contents/MacOS/$app" | grep -q "@executable_path/../Frameworks"; then
+		echo "package.sh macos: $app has no runpath to Contents/Frameworks, so it won't find SDL3 (rebuild with build.sh)" >&2
+		exit 1
+	fi
 	# the icon, from the app's PNGs
 	set_dir="$(mktemp -d)/$app.iconset"
 	mkdir -p "$set_dir"
