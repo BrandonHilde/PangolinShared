@@ -2,6 +2,7 @@ package pangolin
 
 import "core:fmt"
 import "core:math"
+import "core:strconv"
 import "core:strings"
 import "core:unicode/utf8"
 import sdl "vendor:sdl3"
@@ -273,7 +274,7 @@ backend_resolve_image :: proc(data: rawptr, src: string) -> (image: oui.Image, s
 	name, arg := rest, 0
 	if i := strings.index_byte(rest, ':'); i >= 0 {
 		name = rest[:i]
-		for ch in rest[i + 1:] do arg = arg * 10 + int(ch - '0')
+		arg, _ = strconv.parse_int(rest[i + 1:])
 	}
 	fn, have := slot_procs[name]
 	if !have {

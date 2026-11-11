@@ -183,8 +183,10 @@ gif_w16 :: proc(out: ^[dynamic]u8, v: int) {
 
 // `frames` are each src_w x src_h, drawn `scale` times as large. Result in the temp allocator.
 gif_encode_frames :: proc(frames: [][]Color, src_w, src_h, scale: int, delays_ms: []int, loop: bool) -> []u8 {
-	pal, lookup := gif_build_palette(frames)
 	w, h := src_w * scale, src_h * scale
+	// a GIF holds its size in 16 bits
+	if w < 1 || h < 1 || w > 65535 || h > 65535 do return nil
+	pal, lookup := gif_build_palette(frames)
 	out := make([dynamic]u8, context.temp_allocator)
 	append(&out, ..transmute([]u8)string("GIF89a"))
 	gif_w16(&out, w)

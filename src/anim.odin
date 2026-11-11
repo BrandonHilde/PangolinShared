@@ -58,7 +58,8 @@ playback_update :: proc(dt: f32) {
 		set_frame(lo)
 		return
 	}
-	play_timer += dt
+	// a frame that took long (a file dialog was open, the computer slept) doesn't play all it missed
+	play_timer += min(dt, 0.25)
 	for {
 		dur := f32(max(doc.frames[doc.active_frame].duration, 10)) / 1000
 		if play_timer < dur do break

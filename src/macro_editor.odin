@@ -132,7 +132,8 @@ me_reset_view :: proc() {
 
 @(private = "file")
 me_load :: proc(m: ^Macro) {
-	me_autosave()
+	// a save that fails (a name another macro has, a file that can't be written) keeps the graph open with its message
+	if me.m != nil && me.dirty && !me_save() do return
 	macro_free(me.m)
 	me.m = macro_clone(m)
 	name_set(&me.lib_name, m.name)
@@ -144,7 +145,7 @@ me_load :: proc(m: ^Macro) {
 
 @(private = "file")
 me_new :: proc() {
-	me_autosave()
+	if me.m != nil && me.dirty && !me_save() do return
 	macro_free(me.m)
 	me.m = macro_new("New macro")
 	name_set(&me.lib_name, "")

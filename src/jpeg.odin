@@ -58,6 +58,7 @@ Jpg :: struct {
 	adobe:           bool,
 	adobe_transform: int,
 	orientation:     int,
+	file_len:        int,
 }
 
 @(private = "file")
@@ -77,6 +78,7 @@ jpeg_decode :: proc(data: []u8) -> (pix: []Color, w, h: int, ok: bool) {
 		return
 	}
 	j := new(Jpg)
+	j.file_len = len(data)
 	defer {
 		for &c in j.comps {
 			delete(c.coefs)
@@ -239,7 +241,9 @@ jpg_sof :: proc(j: ^Jpg, seg: []u8, progressive: bool) -> bool {
 	j.h = int(seg[1]) << 8 | int(seg[2])
 	j.w = int(seg[3]) << 8 | int(seg[4])
 	nc := int(seg[5])
-	if j.w == 0 || j.h == 0 || j.w * j.h > JPEG_MAX_PIXELS || (nc != 1 && nc != 3 && nc != 4) || len(seg) < 6 + nc * 3 {
+	// each 8x8 block takes at least one bit of the file, so a small file can't hold a huge picture: without this a
+	// few bytes of header could ask for gigabytes
+	if j.w == 0 || j.h == 0 || j.w * j.h > JPEG_MAX_PIXELS || j.w * j.h > j.file_len * 512 + 4096 || (nc != 1 && nc != 3 && nc != 4) || len(seg) < 6 + nc * 3 {
 		return false
 	}
 	j.ncomp = nc

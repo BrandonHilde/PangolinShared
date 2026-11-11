@@ -123,7 +123,8 @@ macro_from_text :: proc(text: string) -> (m: ^Macro, ok: bool) {
 			w := macro_words(line)
 			if len(w) < 3 do continue
 			id, iok := strconv.parse_int(w[1])
-			if !iok || id <= 0 || macro_node(m, id) != nil do continue
+			// every node is looked up by id as it is added, so a file of very many nodes would take very long to load
+			if !iok || id <= 0 || len(m.nodes) >= MACRO_MAX_NODES || macro_node(m, id) != nil do continue
 			x, y: f32
 			rest := w[3:]
 			if len(w) > 3 && strings.has_prefix(w[3], "@") {
@@ -262,12 +263,18 @@ macro_rename :: proc(m: ^Macro, name: string) -> (ok: bool, msg: string) {
 	if n == "" do return false, "Enter a name for the macro"
 	if other := macro_find(n); other != nil && other != m do return false, fmt.tprintf("There is already a macro called %s", n)
 	old := strings.clone(m.name, context.temp_allocator)
+	old_path := strings.clone(macro_path(old), context.temp_allocator)
 	macro_set_name(m, n)
+	// a change of case only is the same file where names ignore case, and a second file where they don't:
+	// renaming the file first is right for both
+	case_only := old != n && strings.equal_fold(old, n)
+	if case_only do os.rename(old_path, macro_path(n))
 	if !macro_save(m) {
+		if case_only do os.rename(macro_path(n), old_path)
 		macro_set_name(m, old)
 		return false, "Could not write the macro file"
 	}
-	if !strings.equal_fold(old, n) do os.remove(macro_path(old))
+	if !strings.equal_fold(old, n) do os.remove(old_path)
 	macro_lib_sort()
 	return true, ""
 }

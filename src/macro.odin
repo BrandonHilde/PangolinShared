@@ -35,6 +35,7 @@ import "core:strings"
 // nodes or settings this version doesn't know.
 
 MACRO_MAX_STEPS :: 10000 // nodes one run may execute
+MACRO_MAX_NODES :: 10000 // nodes one macro file may hold
 MACRO_START :: "flow.start"
 
 Macro_Type :: enum u8 {
