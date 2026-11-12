@@ -18,6 +18,10 @@ env:
   APP: ${{ github.event.repository.name }}
   ODIN_RELEASE: dev-2026-10 # the Odin the apps are made with (commit 84bc3fc)
   SDL3_TAG: release-3.4.8 # bundled with the Linux and macOS builds; Windows uses the SDL3.dll that comes with Odin
+  # what a tag's release gets. Every platform is still built and tested on every run (its bundle is on the run's
+  # page); one left out here can be added to the published release later with
+  #   gh release upload v<version> <App>-<version>-macos.zip
+  RELEASE_PLATFORMS: windows linux
 
 permissions:
   contents: write
@@ -207,9 +211,23 @@ jobs:
         if: github.ref_type == 'tag'
         run: |
           name="$(sed -n 's/^APP_NAME :: "\(.*\)".*/\1/p' src/brand.odin)"
+          files=""
+          for p in $RELEASE_PLATFORMS; do
+            case "$p" in
+            linux) files="$files bundles/$APP-$VERSION-linux.tar.gz" ;;
+            *) files="$files bundles/$APP-$VERSION-$p.zip" ;;
+            esac
+          done
+          notes="Download the file for your computer, unpack it, and read INSTALL.txt inside: nothing needs installing. Windows will show a SmartScreen warning the first time, because the beta isn't code-signed yet: click More info, then Run anyway."
+          case " $RELEASE_PLATFORMS " in
+          *" macos "*) ;;
+          *) notes="$notes
+
+          The macOS version is coming soon." ;;
+          esac
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" bundles/* --clobber
+            gh release upload "$GITHUB_REF_NAME" $files --clobber
           else
-            gh release create "$GITHUB_REF_NAME" bundles/* --draft --prerelease --generate-notes \
-              --title "$name $VERSION"
+            gh release create "$GITHUB_REF_NAME" $files --draft --prerelease --generate-notes \
+              --title "$name $VERSION" --notes "$notes"
           fi
