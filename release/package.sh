@@ -27,6 +27,7 @@ guide() {
 # what every bundle carries: the read-me, the licences (the app's, the font's, SDL's)
 common() {
 	cp README.md "$1/README.md"
+	[ -f GUIDE.md ] && cp GUIDE.md "$1/GUIDE.md"
 	cp LICENSE "$1/LICENSE.txt"
 	for f in assets/fonts/*OFL*.txt; do [ -f "$f" ] && cp "$f" "$1/LICENSE-font-$(basename "$f")"; done
 	sdl_license="$(odin root)"

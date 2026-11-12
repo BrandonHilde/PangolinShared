@@ -1,6 +1,14 @@
 # Pangolin Shared
 
 The code the Pangolin tools have in common: Pangolin Paints, Pangolin Pixels and Pangolin Scales.
+
+**Looking for the apps?** This repository is only their shared code. Download them here:
+
+| App | What it's for | Download |
+|---|---|---|
+| [Pangolin Pixels](https://github.com/BrandonHilde/PangolinPixels) | pixel art and sprite animation | [releases](https://github.com/BrandonHilde/PangolinPixels/releases) |
+| [Pangolin Paints](https://github.com/BrandonHilde/PangolinPaints) | painting, oil paint and photo editing | [releases](https://github.com/BrandonHilde/PangolinPaints/releases) |
+| [Pangolin Scales](https://github.com/BrandonHilde/PangolinScales) | vector drawings (SVG) and fonts | [releases](https://github.com/BrandonHilde/PangolinScales/releases) |
 Each app has this repository as a git submodule in `libs/shared`.
 
 Odin compiles one folder as one package, so the apps do not import this code. Their build scripts run
