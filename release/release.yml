@@ -21,7 +21,7 @@ env:
   # what a tag's release gets. Every platform is still built and tested on every run (its bundle is on the run's
   # page); one left out here can be added to the published release later with
   #   gh release upload v<version> <App>-<version>-macos.zip
-  RELEASE_PLATFORMS: windows linux
+  RELEASE_PLATFORMS: windows linux macos
 
 permissions:
   contents: write
@@ -218,7 +218,15 @@ jobs:
             *) files="$files bundles/$APP-$VERSION-$p.zip" ;;
             esac
           done
-          notes="Download the file for your computer, unpack it, and read INSTALL.txt inside: nothing needs installing. Windows will show a SmartScreen warning the first time, because the beta isn't code-signed yet: click More info, then Run anyway."
+          notes="Download the file for your computer, unpack it, and read INSTALL.txt inside: nothing needs installing.
+
+          - **Windows:** a SmartScreen warning appears the first time, because the beta isn't code-signed yet. Click **More info**, then **Run anyway**."
+          case " $RELEASE_PLATFORMS " in
+          *" macos "*) notes="$notes
+          - **macOS** (Apple silicon, macOS 11 or later): macOS blocks it the first time, because it isn't notarized yet. Open **System Settings > Privacy & Security** and click **Open Anyway** (on macOS 14 or earlier, right-click the app and choose **Open**). For a Wacom tablet, install Wacom's macOS driver." ;;
+          esac
+          notes="$notes
+          - **Linux** (x86-64, glibc 2.34 or newer): run the program in the unpacked folder. \`./install.sh --no-build\` adds it to the application menu."
           case " $RELEASE_PLATFORMS " in
           *" macos "*) ;;
           *) notes="$notes

@@ -41,6 +41,13 @@ Settings, workspaces and macros are saved in:
 Your pictures are saved wherever you choose when you save them.
 
 
+Drawing tablets
+---------------
+
+For pen pressure and the eraser end with a Wacom tablet, install Wacom's driver for macOS (from wacom.com)
+and restart the app. Other tablets need their maker's macOS driver too.
+
+
 Updating or removing it
 -----------------------
 
